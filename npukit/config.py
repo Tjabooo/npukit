@@ -54,6 +54,10 @@ DEFAULTS: dict = {
                    "indentation and spacing. Output only the text, no commentary, no code fences."),
         "describe_prompt": "Describe this image briefly and precisely.",
     },
+    "ui": {
+        "menu_theme": "",             # rofi -theme for `npu menu` (empty = rofi's default)
+        "search_theme": "",           # rofi -theme for `npu search --rofi`
+    },
     "search": {
         "roots": ["~/workspace", "~/Documents"],
         "db": "~/.local/share/npukit/index.sqlite",

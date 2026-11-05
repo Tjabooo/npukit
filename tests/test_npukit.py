@@ -76,6 +76,8 @@ db = "{t / 'index.sqlite'}"
         (t / "notes").mkdir()
         (t / "notes" / "rust.md").write_text("# Rust notes\nownership and borrowing in rust\n")
         (t / "notes" / "cook.txt").write_text("pancakes: flour, milk, eggs\n")
+        (t / "notes" / "tool").write_text("#!/bin/sh\necho rust tool\n")
+        (t / "notes" / "blob").write_text("no shebang, no extension\n")
         os.chmod(ROOT / "tests" / "fake_flm.py", 0o755)
         cls.env = dict(os.environ, NPUKIT_CONFIG=str(t / "config.toml"), PYTHONPATH=str(ROOT))
         os.environ["NPUKIT_CONFIG"] = str(t / "config.toml")
@@ -158,6 +160,9 @@ db = "{t / 'index.sqlite'}"
         self.assertEqual(search.index(argparse.Namespace(full=False, quiet=True)), 0)
         hits = search.query("rust", 2, C.load())
         self.assertTrue(hits[0][1].endswith("rust.md"))
+        names = {Path(p).name for p in map(str, search.candidates(C.load()))}
+        self.assertIn("tool", names)       # extensionless script with a shebang
+        self.assertNotIn("blob", names)    # extensionless, no shebang
 
 
 if __name__ == "__main__":

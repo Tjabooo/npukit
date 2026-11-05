@@ -116,15 +116,14 @@ def cmd_menu(args) -> int:
              ("Describe region", ["ocr", "--describe"]), ("Search notes + code", ["search", "--rofi"]),
              ("Load fast model", ["load", "fast"]), ("Load quality model", ["load", "quality"]),
              ("Unload everything", ["stop"]), ("Update search index", ["index"])]
+    cfg = C.load()
+    theme = args.theme or (str(C.expand(cfg["ui"]["menu_theme"])) if cfg["ui"]["menu_theme"] else None)
     r = subprocess.run(["rofi", "-dmenu", "-i", "-p", "npu", "-format", "i"] +
-                       (["-theme", args.theme] if args.theme else []),
+                       (["-theme", theme] if theme else []),
                        input="\n".join(i for i, _ in items).encode(), capture_output=True, check=False)
     if r.returncode != 0 or not r.stdout.strip():
         return 1
-    sub = items[int(r.stdout.strip())][1]
-    if args.theme and sub[0] == "search":
-        sub = sub + ["--theme", args.theme]
-    return main(sub)
+    return main(items[int(r.stdout.strip())][1])
 
 
 def main(argv=None) -> int:

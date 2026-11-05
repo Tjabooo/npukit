@@ -28,10 +28,37 @@ What this says:
 - gpt-oss:20b (MoE, ~3.6B active) decodes faster than the dense 9B and is the better "quality" model, but
   takes ~22 s to load and ~4 s to the first token.
 
+## On battery
+
+The laptop's firmware caps the package at ~12 W on battery (platform profile `quiet`), so every backend runs
+into the same power ceiling and energy per token follows speed.
+
+| Model | Runs on | tok/s | TTFT | pkg W | J/tok | load |
+|---|---|---:|---:|---:|---:|---:|
+| qwen3.5:4b (powersaver) | NPU | 15.8 | 0.84 s | 11.4 | 0.72 | 3.5 s |
+| gpt-oss:20b (powersaver) | NPU | 18.0 | 5.25 s | 11.1 | 0.62 | 21.1 s |
+| Qwen3.5-4B Q4_K_M GGUF | iGPU, Vulkan | 21.8 | 0.34 s | 11.9 | 0.54 | 6.0 s |
+| Qwen3.5-4B Q4_K_M GGUF | iGPU, ROCm | 18.1 | 0.51 s | 11.9 | 0.66 | 5.4 s |
+| Qwen3.5-4B Q4_K_M GGUF | CPU | 14.3 | 0.70 s | 12.0 | 0.84 | 3.7 s |
+
+- The NPU's speed doesn't change between AC and battery (15.8 tok/s both); the iGPU loses 12–25 % and the CPU 5 %.
+- Per token the iGPU with Vulkan is still the most efficient on this machine. Use the NPU to keep the iGPU and
+  CPU free (desktop, browser, compiles stay smooth while a model runs) and for always-there helpers
+  (dictation, OCR, search), not because a single answer costs less energy.
+- Whole-system draw is in the raw output (`sys`), but it moved with screen and background activity by more than
+  the differences between backends, so the table uses package power.
+
+## Idle cost
+
+| State | Wakeups/s (flm + gateway) | Package power |
+|---|---:|---:|
+| model loaded, no requests | 0 + 0 | +0.4 W vs. unloaded; NPU runtime-suspended |
+| nothing loaded | gateway exits after `exit_after`; only the systemd socket remains | baseline |
+
 ## Other NPU workloads
 
 | Workload | Model | Speed |
 |---|---|---|
 | Speech to text | whisper-v3:turbo | 11 s clip → 2.9 s warm, ~5 s including model load |
-| Embeddings | embed-gemma:300m | ~3.7 chunks/s (60-line chunks); ~1.5 s fixed cost per request, so batch |
+| Embeddings | embed-gemma:300m | 2.4–3.7 chunks/s (60-line chunks), ~21 W package while indexing; ~1.5 s fixed cost per request, so batch. Full index of ~1000 files: 20 min, updates: seconds |
 | OCR of a code screenshot | qwen3.5:4b / qwen3vl-it:4b | ~3 s prefill + ~15 tok/s |

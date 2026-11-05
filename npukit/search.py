@@ -61,8 +61,15 @@ def candidates(cfg) -> list[Path]:
     globs = [os.path.expanduser(g) for g in s.get("exclude_globs", [])]
     out: list[Path] = []
 
+    def is_script(p: Path) -> bool:  # extensionless tools in bin dirs: index when they start with #!
+        try:
+            with open(p, "rb") as f:
+                return f.read(2) == b"#!"
+        except OSError:
+            return False
+
     def ok(p: Path) -> bool:
-        if p.suffix.lower() not in exts and p.name not in names:
+        if p.suffix.lower() not in exts and p.name not in names and not (not p.suffix and is_script(p)):
             return False
         if any(part in excl for part in p.parts):
             return False
@@ -244,8 +251,9 @@ def search(args) -> int:
     k = args.n or int(cfg["search"]["results"])
     home = os.path.expanduser("~")
     q = " ".join(args.query).strip()
-    if args.rofi:
-        code, q = ui.rofi([], "search", theme=args.theme, filter_input=True,
+    theme = args.theme or (str(C.expand(cfg["ui"]["search_theme"])) if cfg["ui"]["search_theme"] else None)
+    if args.rofi and not q:
+        code, q = ui.rofi([], "search", theme=theme, filter_input=True,
                           mesg="semantic search · notes + code · runs on the NPU")
         if code != 0 or not q:
             return 1
@@ -266,7 +274,7 @@ def search(args) -> int:
             lines.append(f"{path.replace(home, '~')}:{a}  <span alpha='55%'>{score:.2f}  {snippet}</span>")
         r = subprocess.run(["rofi", "-dmenu", "-i", "-markup-rows", "-p", q[:30], "-format", "i",
                             "-mesg", f"{len(hits)} results · {dt:.2f}s"] +
-                           (["-theme", args.theme] if args.theme else []),
+                           (["-theme", theme] if theme else []),
                            input="\n".join(lines).encode(), capture_output=True, check=False)
         if r.returncode == 0 and r.stdout.strip():
             _, path, a, _, _ = hits[int(r.stdout.strip())]

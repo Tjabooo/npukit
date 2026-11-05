@@ -42,6 +42,10 @@ min_rms = 120                # quieter recordings count as silence
 capture = ["hyprshot", "-z", "-s", "-m", "region", "--raw"]   # any command that prints a PNG
 model = "vision"
 
+[ui]
+menu_theme = ""              # rofi -theme for `npu menu`, e.g. "~/.config/rofi/npu.rasi"
+search_theme = ""            # rofi -theme for `npu search --rofi`
+
 [search]
 roots = ["~/workspace", "~/Documents"]
 db = "~/.local/share/npukit/index.sqlite"
