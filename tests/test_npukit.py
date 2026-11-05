@@ -151,6 +151,9 @@ db = "{t / 'index.sqlite'}"
                 break
             time.sleep(0.02)
         self.assertIn("qwen3.5 4b", bar["text"])
+        st = json.loads(Path(self.tmp.name, "status.json").read_text())
+        self.assertEqual(st["chat_model"], "qwen3.5:4b")
+        self.assertIn(st["state"], ("ready", "busy"))
         self.assertIn("ready", bar["class"])
 
     def test_7_search_index_and_query(self):

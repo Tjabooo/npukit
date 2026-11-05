@@ -351,6 +351,18 @@ class Gateway:
             os.replace(tmp, path)
         except OSError as e:
             log("bar write failed:", e)
+        # machine-readable twin for other tools (e.g. a fleet dashboard reading it over SSH)
+        st = {"state": st, "activity": act, "components": c.components if c else [],
+              "chat_model": c.chat_model if c else None, "pmode": c.pmode if c else self.pmode(),
+              "power": "ac" if ac else "battery", "last_tps": self.last_tps if c else None,
+              "updated": time.time()}
+        try:
+            sp = path.with_name("status.json")
+            tmp = sp.with_suffix(".tmp")
+            tmp.write_text(json.dumps(st) + "\n")
+            os.replace(tmp, sp)
+        except OSError as e:
+            log("status write failed:", e)
         sig = int(b.get("signal") or 0)
         if sig:
             _signal_waybar(signal.SIGRTMIN + sig)

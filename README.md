@@ -109,6 +109,8 @@ hl.bind("SUPER + ALT + S",       hl.dsp.exec_cmd(npu .. "search --rofi")) -- sem
 
 Classes: `off`, `loading`, `ready`, `busy` (plus `stt`/`ocr`/`index` while a tool runs), `rec` while dictating, `error`.
 The gateway rewrites the file and sends `SIGRTMIN+16` to waybar on every change, so the bar never polls.
+Next to it, `status.json` holds the same state for scripts: `state`, `activity`, `components`, `chat_model`,
+`pmode`, `power`, `last_tps`, `updated`.
 
 ## Configuration
 
