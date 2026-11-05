@@ -1,0 +1,11 @@
+[Unit]
+Description=npukit NPU gateway socket (OpenAI-compatible API, localhost)
+Documentation=https://github.com/Tjabooo/npukit
+
+[Socket]
+# keep in sync with [server] listen in ~/.config/npukit/config.toml
+ListenStream=127.0.0.1:13306
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target

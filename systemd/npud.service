@@ -1,0 +1,17 @@
+[Unit]
+Description=npukit NPU gateway (owns the FastFlowLM process, unloads it when idle)
+Documentation=https://github.com/Tjabooo/npukit
+Requires=npud.socket
+After=npud.socket
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/npu serve
+Restart=on-failure
+RestartSec=3
+# flm needs to lock its NPU buffers
+LimitMEMLOCK=infinity
+# the gateway idles in epoll; keep it from competing with the desktop
+Nice=5
+TimeoutStopSec=20
+KillMode=mixed

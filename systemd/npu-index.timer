@@ -1,0 +1,12 @@
+[Unit]
+Description=npukit: update the semantic search index every 30 minutes
+
+[Timer]
+OnStartupSec=10min
+OnUnitInactiveSec=30min
+RandomizedDelaySec=2min
+# no wake-ups for this: it runs when the machine is awake anyway
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

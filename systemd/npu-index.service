@@ -1,0 +1,12 @@
+[Unit]
+Description=npukit: update the semantic search index (embeddings on the NPU)
+Documentation=https://github.com/Tjabooo/npukit
+Wants=npud.socket
+After=npud.socket
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/npu index --quiet
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch

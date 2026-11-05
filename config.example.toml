@@ -1,0 +1,55 @@
+# npukit configuration: ~/.config/npukit/config.toml
+# Every key is optional; the values below are the built-in defaults.
+
+[server]
+listen = "127.0.0.1:13306"   # also change ListenStream= in npud.socket if you change this
+flm = "flm"                  # FastFlowLM binary (1.0.12+), or a path like "~/fastflowlm/flm"
+flm_port = 13307             # private port of the flm child process (localhost only)
+flm_args = []                # extra `flm serve` arguments, e.g. ["--ctx-len", "16384"]
+max_components = 2           # XDNA2 fits a chat model + one helper (Whisper or embeddings)
+exit_after = 60              # socket-activated gateway exits after this long with nothing loaded
+
+[models]
+default = "fast"             # used when a request names no model
+[models.aliases]             # names usable as "model" in any request
+fast = "qwen3.5:4b"          # everyday chat/coding (vision too)
+quality = "gpt-oss:20b"      # slower, better answers
+vision = "qwen3vl-it:4b"     # OCR / describing screenshots
+
+[power]
+ac_online = ""               # path to the AC adapter's "online" file; empty = auto-detect
+ac_pmode = "balanced"        # flm --pmode: powersaver | balanced | performance | turbo
+battery_pmode = "powersaver"
+ac_idle_unload = 600         # seconds without a request before the NPU is freed
+battery_idle_unload = 120
+
+[bar]
+file = "~/.local/state/npukit/bar.json"   # waybar: "exec": "cat <file>", "signal": <signal>
+signal = 16                  # RTMIN+16 is sent to waybar on every change; 0 = off
+tag = "NPU"
+# colors = { tag = "#9b5de5", dim = "#6c6c8a", text = "#babbf1", hot = "#f15bb5", load = "#00c6ff", rec = "#ff5252" }
+
+[dictate]
+record = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16"]
+max_seconds = 120
+language = ""                # empty = auto-detect, or "en", "sv", ...
+prompt = ""                  # spelling hints: names, jargon
+type = ["wtype", "-"]        # how text gets typed; skipped when the tool isn't installed
+copy = true                  # also put the text on the clipboard
+min_rms = 120                # quieter recordings count as silence
+
+[ocr]
+capture = ["hyprshot", "-z", "-s", "-m", "region", "--raw"]   # any command that prints a PNG
+model = "vision"
+
+[search]
+roots = ["~/workspace", "~/Documents"]
+db = "~/.local/share/npukit/index.sqlite"
+results = 12
+open = ["xdg-open", "{path}"]   # e.g. ["code", "-g", "{path}:{line}"]
+exclude_globs = ["*.min.*", "*.map", "*-lock.json", "*.lock", "*/third_party/*",
+                 "*/external/*", "*/wp-includes/*", "*/wp-admin/*", "*/site-packages/*"]
+max_file_kb = 384
+max_chunks_per_file = 40
+chunk_lines = 60
+overlap_lines = 8
