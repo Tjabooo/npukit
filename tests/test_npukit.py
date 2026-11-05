@@ -167,6 +167,24 @@ db = "{t / 'index.sqlite'}"
         self.assertIn("tool", names)       # extensionless script with a shebang
         self.assertNotIn("blob", names)    # extensionless, no shebang
 
+    def test_8_ocr_translate(self):
+        import argparse, contextlib, io
+        from npukit import ocr, config as C
+        o = C.load(reload=True)["ocr"]
+        self.assertEqual(ocr.language("sv"), "Swedish")
+        self.assertEqual(ocr.language("Klingon"), "Klingon")
+        msgs = ocr.translate_messages("hej", "German", o["translate_prompt"])
+        self.assertIn("into German", msgs[0]["content"])
+        self.assertEqual(msgs[1], {"role": "user", "content": "hej"})
+        png = Path(self.tmp.name) / "shot.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+        out, err = io.StringIO(), io.StringIO()
+        ns = argparse.Namespace(file=str(png), describe=False, ask=None, translate="", copy=False, model=None)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(ocr.main(ns), 0)
+        self.assertIn("model=", out.getvalue())
+        self.assertIn("---", err.getvalue())   # original printed before the translation
+
 
 if __name__ == "__main__":
     unittest.main()

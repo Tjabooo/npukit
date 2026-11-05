@@ -53,6 +53,11 @@ DEFAULTS: dict = {
         "prompt": ("Transcribe all text in this image exactly as written. Keep line breaks, "
                    "indentation and spacing. Output only the text, no commentary, no code fences."),
         "describe_prompt": "Describe this image briefly and precisely.",
+        "translate_to": "English",    # `npu ocr --translate` with no language
+        "translate_model": "fast",    # chat model that translates the read text
+        "translate_prompt": ("Translate the text the user sends into {lang}. Keep line breaks, lists and "
+                             "formatting; leave code, names, numbers and URLs as they are. If it is already "
+                             "in {lang}, return it unchanged. Output only the translation, no commentary."),
     },
     "ui": {
         "menu_theme": "",             # rofi -theme for `npu menu` (empty = rofi's default)

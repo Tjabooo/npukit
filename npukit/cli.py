@@ -113,6 +113,7 @@ def cmd_ask(args) -> int:
 
 def cmd_menu(args) -> int:
     items = [("Dictate (toggle)", ["dictate"]), ("Read text from region (OCR)", ["ocr"]),
+             ("Translate region", ["ocr", "--translate"]),
              ("Describe region", ["ocr", "--describe"]), ("Search notes + code", ["search", "--rofi"]),
              ("Load fast model", ["load", "fast"]), ("Load quality model", ["load", "quality"]),
              ("Unload everything", ["stop"]), ("Update search index", ["index"])]
@@ -175,6 +176,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("ocr", help="screen region → text on the clipboard")
     s.add_argument("--describe", action="store_true", help="describe the region instead")
     s.add_argument("--ask", help="custom question about the region")
+    s.add_argument("-t", "--translate", nargs="?", const="", metavar="LANG",
+                   help="translate the text (default: [ocr] translate_to); LANG = name or code like sv")
     s.add_argument("--file", help="read this PNG instead of capturing")
     s.add_argument("--copy", action="store_true", help="copy even with --file")
     s.add_argument("-m", "--model")

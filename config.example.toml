@@ -41,6 +41,8 @@ min_rms = 120                # quieter recordings count as silence
 [ocr]
 capture = ["hyprshot", "-z", "-s", "-m", "region", "--raw"]   # any command that prints a PNG
 model = "vision"
+translate_to = "English"     # `npu ocr --translate` without a language (names or codes: sv, de, ja, ...)
+translate_model = "fast"     # chat model that translates the text the vision model read
 
 [ui]
 menu_theme = ""              # rofi -theme for `npu menu`, e.g. "~/.config/rofi/npu.rasi"
