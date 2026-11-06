@@ -199,6 +199,7 @@ class LlamaCppGatewayTests(unittest.TestCase):
         os.chmod(fake, 0o755)
         for f in ("q9.gguf", "mm.gguf", "small.gguf", "whisper.bin"):
             (t / f).write_bytes(b"GGUF")
+        (t / "ac_online").write_text("1\n")  # not the host's charger: its state changes the timeouts
         cls.cfg_path = t / "config.toml"
         cls.cfg_path.write_text(f"""
 [server]
@@ -215,7 +216,9 @@ whisper_model = "{t / 'whisper.bin'}"
 small = {{ path = "{t / 'small.gguf'}" }}
 gone = {{ path = "{t / 'missing.gguf'}" }}
 [power]
+ac_online = "{t / 'ac_online'}"
 ac_idle_unload = 3
+battery_idle_unload = 3
 [bar]
 file = "{t / 'bar.json'}"
 signal = 0
