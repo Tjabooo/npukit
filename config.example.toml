@@ -9,6 +9,7 @@ flm_args = []                # extra `flm serve` arguments, e.g. ["--ctx-len", "
 max_components = 2           # XDNA2 fits a chat model + one helper (Whisper or embeddings)
 exit_after = 60              # socket-activated gateway exits after this long with nothing loaded
 backend = "flm"              # flm = FastFlowLM on the NPU; "llamacpp" = llama.cpp + whisper.cpp (GPU/CPU)
+memory_guard_gb = 1.5        # memory pressure + less RAM available than this = model servers killed at once; 0 = off
 
 # Only used with backend = "llamacpp" (machines without an XDNA2 NPU). Each component runs as its own
 # server on flm_port + 0 / 1 / 2 (chat / speech / embeddings), loaded on demand, unloaded on idle.

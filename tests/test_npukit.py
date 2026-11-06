@@ -450,6 +450,48 @@ class HeadroomTests(unittest.TestCase):
         # its 6 GB VRAM and 1 GB RAM come back: room 11.8 GB, 1.2 GB to RAM, 11 GB available
         self.eng.fits("big", {"path": "x"}, Child([old], None))
 
+    def test_hf_models_are_sized_before_download(self):
+        from npukit import gateway
+        tree = [{"path": "M-Q4_K_M-00001-of-00002.gguf", "size": 6 * self.GB},
+                {"path": "M-Q4_K_M-00002-of-00002.gguf", "size": 5 * self.GB},
+                {"path": "M-Q8_0.gguf", "size": 20 * self.GB},
+                {"path": "mmproj-F16.gguf", "size": self.GB}, {"path": "README.md", "size": 1}]
+        size = lambda ref: gateway.hf_size(ref, fetch=lambda repo: tree)
+        self.assertEqual(size("u/a"), 12 * self.GB)            # default Q4_K_M, both parts + projector
+        self.assertEqual(size("u/b:Q8_0"), 21 * self.GB)
+        self.assertIsNone(size("u/c:IQ1_S"))                   # quant not in the repo: unknown, not 0
+        self.assertIsNone(gateway.hf_size("u/d", fetch=lambda repo: (_ for _ in ()).throw(OSError())))
+
+    def test_memory_guard_kills_servers_when_ram_runs_out(self):
+        import asyncio
+        from npukit import gateway
+        cfg = self.eng.cfg
+        cfg["server"]["memory_guard_gb"] = 1.5
+        cfg["bar"]["signal"] = 0
+        cfg["bar"]["file"] = str(Path(self.tmp.name) / "bar.json")
+
+        class P:
+            returncode, pid, killed = None, 1, False
+
+            def kill(self):
+                self.killed, self.returncode = True, -9
+
+        async def run():
+            gw = gateway.Gateway(cfg)
+            proc = gateway.Proc("llama", ["chat"], "big", 1, ["x"])
+            proc.proc = P()
+            gw.child = gateway.Child([proc], None)
+            self.assertFalse(gw.on_memory_pressure(avail=3 * self.GB))   # pressure, but RAM left: keep
+            self.assertFalse(proc.proc.killed)
+            self.assertTrue(gw.on_memory_pressure(avail=1 * self.GB))
+            self.assertTrue(proc.proc.killed)
+            self.assertIn("RAM was running out", gw.last_error)
+            await asyncio.sleep(0.05)
+            self.assertIsNone(gw.child)
+            self.assertEqual(gw.state, "error")
+
+        asyncio.run(run())
+
     def test_whisper_leaves_the_gpu_at_the_reserve(self):
         argv = self.eng.plan(["asr"], None, None)[0].argv
         self.assertNotIn("-ng", argv)

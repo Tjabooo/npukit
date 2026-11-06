@@ -21,9 +21,13 @@ import json
 import os
 import re
 import signal
+import select
 import socket
 import sys
+import threading
 import time
+import urllib.parse
+import urllib.request
 
 from . import config as C
 from . import hw
@@ -193,11 +197,16 @@ class LlamaCppEngine:
         return int(vram["total"] * frac) if vram and frac > 0 else 0
 
     def footprint(self, spec: dict) -> int | None:
-        """Bytes a chat server needs (model + projector files + [llamacpp] overhead_gb); None if unknown."""
+        """Bytes a chat server needs (model + projector files + [llamacpp] overhead_gb); None if unknown.
+        hf = "user/repo[:quant]" models are sized from the Hugging Face file list before they download."""
+        extra = int(float(self.lc.get("overhead_gb", 1.0)) * 1e9)
+        if spec.get("size_gb"):
+            return int(float(spec["size_gb"]) * 1e9)
         if not spec.get("path"):
-            return int(float(spec["size_gb"]) * 1e9) if spec.get("size_gb") else None
+            size = hf_size(spec.get("hf", ""))
+            return size + extra if size else None
         files = [C.expand(f) for f in (spec.get("path"), spec.get("mmproj")) if f]
-        return sum(f.stat().st_size for f in files) + int(float(self.lc.get("overhead_gb", 1.0)) * 1e9)
+        return sum(f.stat().st_size for f in files) + extra
 
     def fits(self, tag: str, spec: dict, child: "Child | None") -> None:
         """Refuse a model whose share outside the GPU (whatever doesn't fit above the VRAM reserve)
@@ -284,6 +293,38 @@ class LlamaCppEngine:
                         "present": bool(path and path.exists()) if path else None,
                         "size_gb": round(path.stat().st_size / 1e9, 1) if path and path.exists() else None})
         return out
+
+
+_HF_SIZES: dict[str, int | None] = {}
+
+
+def hf_size(ref: str, fetch=None) -> int | None:
+    """Download size of what llama-server -hf REF fetches: the GGUF files matching the quant (all parts of a
+    split model; Q4_K_M when no quant is given, like llama.cpp) plus a vision projector if the repo has one."""
+    if ref in _HF_SIZES:
+        return _HF_SIZES[ref]
+    repo, _, quant = ref.partition(":")
+    quant = (quant or "Q4_K_M").lower()
+    size = None
+    try:
+        if fetch is None:
+            url = f"https://huggingface.co/api/models/{urllib.parse.quote(repo)}/tree/main?recursive=true"
+            with urllib.request.urlopen(url, timeout=8) as r:
+                tree = json.load(r)
+        else:
+            tree = fetch(repo)
+        ggufs = [(x["path"].rsplit("/", 1)[-1], int(x.get("size") or 0)) for x in tree
+                 if str(x.get("path", "")).endswith(".gguf")]
+        models = [(n, s) for n, s in ggufs if not n.lower().startswith("mmproj")]
+        picked = [s for n, s in models if quant in n.lower()]
+        if not picked and models and ":" not in ref:
+            picked = [min(s for _, s in models)]  # no Q4_K_M: llama.cpp takes the first; assume the smallest
+        proj = sorted(s for n, s in ggufs if n.lower().startswith("mmproj"))
+        size = (sum(picked) + (proj[0] if proj else 0)) if picked else None
+    except (OSError, ValueError, KeyError, TypeError):
+        size = None
+    _HF_SIZES[ref] = size
+    return size
 
 
 def make_engine(cfg: dict):
@@ -476,7 +517,8 @@ class Gateway:
         async with self.lock:
             c = self.child
             if not (c and c.has(need, model) and (pmode is None or c.pmode == pmode)):
-                self.engine.check(need, model, c)  # unknown model, missing file, no room: fail before unloading
+                # unknown model, missing file, no room: fail before unloading (may ask Hugging Face for a size)
+                await asyncio.get_running_loop().run_in_executor(None, self.engine.check, need, model, c)
                 now, timeout = time.monotonic(), self.idle_timeout()
                 keep = []
                 if c:
@@ -543,6 +585,61 @@ class Gateway:
         log("nothing loaded, exiting (systemd starts me again on the next request)")
         self.publish(force_off=True)
         os._exit(0)
+
+    # ---------------------------------------------------------------- memory guard
+    def start_memory_guard(self) -> None:
+        """Kernel memory-pressure trigger (PSI): costs nothing until memory gets tight. When it fires while
+        models are loaded and RAM is nearly gone, they are killed at once so the desktop and games live."""
+        floor = float(self.cfg["server"].get("memory_guard_gb", 0) or 0)
+        if floor <= 0:
+            return
+        try:
+            fd = os.open("/proc/pressure/memory", os.O_RDWR | os.O_NONBLOCK)
+            # 300 ms of stalls in a 2 s window (2 s steps are what unprivileged triggers may use); the
+            # kernel overwrites the last byte with NUL, so send one
+            os.write(fd, b"some 300000 2000000\0")
+        except OSError as e:
+            log("memory guard off:", e)
+            return
+        loop = asyncio.get_running_loop()
+
+        def watch():
+            p = select.poll()
+            p.register(fd, select.POLLPRI)
+            while True:
+                for _, ev in p.poll():
+                    if ev & select.POLLERR:
+                        return
+                    loop.call_soon_threadsafe(self.on_memory_pressure)
+
+        threading.Thread(target=watch, name="memory-guard", daemon=True).start()
+
+    def on_memory_pressure(self, avail: int | None = None) -> bool:
+        """Kill the model servers when RAM available drops under [server] memory_guard_gb. True if it did."""
+        c = self.child
+        if not c or not c.procs:
+            return False
+        floor = float(self.cfg["server"].get("memory_guard_gb", 0) or 0) * 1e9
+        avail = hw.mem_available() if avail is None else avail
+        if avail is None or avail >= floor:
+            return False
+        names = ", ".join(p.chat_model or p.kind for p in c.procs)
+        self.last_error = f"unloaded {names}: RAM was running out ({avail / 1e9:.1f} GB left)"
+        log("memory guard:", self.last_error)
+        for p in c.procs:
+            if p.alive():
+                p.proc.kill()  # SIGKILL frees the memory now; in-flight requests get an error
+        self.state = "error"
+        self.publish()
+
+        async def tidy():
+            async with self.lock:
+                if self.child is c:
+                    await self._stop()
+                    self.state = "error"
+                    self.publish()
+        asyncio.get_running_loop().create_task(tidy())
+        return True
 
     # ---------------------------------------------------------------- status / waybar
     def status(self) -> dict:
@@ -879,6 +976,7 @@ async def serve(cfg: dict) -> None:
         log(f"npud: listening on {host}:{port}")
     gw.publish()
     gw.arm_exit()
+    gw.start_memory_guard()
     async with server:
         await stop.wait()
     async with gw.lock:

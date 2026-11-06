@@ -236,6 +236,12 @@ the CPU when the GPU is at the reserve. `threads` caps the CPU threads; the serv
 and `CPUWeight=50`, so a game wins when the CPU is contended. GPU *compute* can't be capped: a reply keeps
 the GPU busy while it is generated (seconds), and the card is idle the rest of the time.
 
+**Never taking the machine down.** Any model can be named (a local GGUF or `hf = "user/repo:quant"`; hf models
+are sized from the Hugging Face file list before they download), and the RAM check above refuses what can't fit.
+While models are loaded, a kernel memory-pressure trigger (PSI, no polling) watches RAM: when it fires and less
+than `[server] memory_guard_gb` (1.5 GB) is available, the model servers are killed on the spot and the bar says
+why. `OOMScoreAdjust=500` on npud.service makes them the first thing the kernel's OOM killer picks.
+
 ```sh
 sudo pacman -S llama-cpp whisper-cpp ggml-vulkan   # Arch; elsewhere build both with -DGGML_VULKAN=ON
 scripts/get-models.sh                              # Whisper, Qwen3.5-9B, Qwen3.6-35B-A3B (--no-quality skips it)

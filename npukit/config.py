@@ -19,6 +19,10 @@ DEFAULTS: dict = {
         # flm = FastFlowLM on the XDNA2 NPU; llamacpp = llama.cpp (llama-server) + whisper.cpp
         # (whisper-server) on a GPU via Vulkan/ROCm/CUDA, or the CPU, for machines without an NPU
         "backend": "flm",
+        # kill the model servers when memory pressure hits and less than this much RAM is available, so a
+        # model can never take the desktop or a game down with it; 0 = off. (npud.service also gives them
+        # OOMScoreAdjust=500: if the kernel has to kill something, they go first.)
+        "memory_guard_gb": 1.5,
     },
     "llamacpp": {
         "server": "llama-server",     # llama.cpp server binary (chat, vision, embeddings)

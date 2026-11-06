@@ -4,6 +4,11 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+- Memory guard: a PSI memory-pressure trigger kills the model servers when RAM available falls under
+  `[server] memory_guard_gb` (1.5 GB), and npud.service sets `OOMScoreAdjust=500`, so a model can't take
+  the desktop or a game down. `hf = "…"` models are sized from the Hugging Face file list for the RAM check
+  before they download; the check runs off the event loop.
+
 - Translation is faithful by default: the prompt tells the model never to refuse, soften or censor
   profanity, insults or slurs (the 9B model refused vulgar game chat before), and OCR transcribes them as
   written. `[ocr] translate_context` adds notes (source, slang glossary); `[ocr] translate_ocr_model` picks

@@ -15,5 +15,7 @@ LimitMEMLOCK=infinity
 # under CPU contention (a game) they get half the share of a normal app
 Nice=5
 CPUWeight=50
+# if the kernel ever runs out of memory, the model servers are what it kills, not the desktop or a game
+OOMScoreAdjust=500
 TimeoutStopSec=20
 KillMode=mixed
