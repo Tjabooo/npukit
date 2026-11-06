@@ -111,6 +111,28 @@ def cmd_ask(args) -> int:
     return 0
 
 
+def wait_menu_gone(settle: float, namespace: str = "rofi", timeout: float = 1.5) -> None:
+    """Block until the menu is off screen, so a frozen-screen region pick doesn't capture it.
+
+    The compositor fades a closed layer out after rofi exits; wait for the layer to leave
+    `hyprctl layers` (when Hyprland is there) and then for the fade itself."""
+    if settle <= 0:
+        return
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            out = subprocess.run(["hyprctl", "layers", "-j"], capture_output=True, text=True,
+                                 timeout=1, check=False).stdout
+            mons = json.loads(out or "{}")
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            break
+        names = [l.get("namespace") for m in mons.values() for lv in m.get("levels", {}).values() for l in lv]
+        if namespace not in names:
+            break
+        time.sleep(0.03)
+    time.sleep(settle)
+
+
 def cmd_menu(args) -> int:
     items = [("Dictate (toggle)", ["dictate"]), ("Read text from region (OCR)", ["ocr"]),
              ("Translate region", ["ocr", "--translate"]),
@@ -124,7 +146,10 @@ def cmd_menu(args) -> int:
                        input="\n".join(i for i, _ in items).encode(), capture_output=True, check=False)
     if r.returncode != 0 or not r.stdout.strip():
         return 1
-    return main(items[int(r.stdout.strip())][1])
+    argv = items[int(r.stdout.strip())][1]
+    if argv[0] == "ocr":  # region pick freezes the screen: let the menu vanish first
+        wait_menu_gone(float(cfg["ui"].get("menu_close_wait", 0.45)))
+    return main(argv)
 
 
 def main(argv=None) -> int:
