@@ -1,4 +1,4 @@
-"""Semantic search over notes and code with NPU embeddings (EmbeddingGemma via FastFlowLM).
+"""Semantic search over notes and code with EmbeddingGemma embeddings (FastFlowLM on the NPU, or llama.cpp).
 
 `npu index` walks the configured roots (git repos: tracked + untracked-but-not-ignored files;
 other dirs: a plain walk with excluded dirs), re-embeds only files whose size or mtime changed,
@@ -254,7 +254,7 @@ def search(args) -> int:
     theme = args.theme or (str(C.expand(cfg["ui"]["search_theme"])) if cfg["ui"]["search_theme"] else None)
     if args.rofi and not q:
         code, q = ui.rofi([], "search", theme=theme, filter_input=True,
-                          mesg="semantic search · notes + code · runs on the NPU")
+                          mesg=f"semantic search · notes + code · runs on the {C.engine_label(cfg)}")
         if code != 0 or not q:
             return 1
     if not q:
