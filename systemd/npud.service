@@ -11,7 +11,9 @@ Restart=on-failure
 RestartSec=3
 # flm needs to lock its NPU buffers
 LimitMEMLOCK=infinity
-# the gateway idles in epoll; keep it from competing with the desktop
+# the gateway idles in epoll; keep it and its model servers from competing with the desktop:
+# under CPU contention (a game) they get half the share of a normal app
 Nice=5
+CPUWeight=50
 TimeoutStopSec=20
 KillMode=mixed

@@ -211,6 +211,8 @@ start_timeout = 20
 server = "{fake}"
 whisper = "{fake}"
 whisper_model = "{t / 'whisper.bin'}"
+vram_reserve = 0     # headroom rules read the host's GPU/RAM: tested in HeadroomTests instead
+ram_reserve_gb = 0
 [llamacpp.models]
 "qwen3.5:9b" = {{ path = "{t / 'q9.gguf'}", mmproj = "{t / 'mm.gguf'}" }}
 small = {{ path = "{t / 'small.gguf'}" }}
@@ -325,6 +327,71 @@ signal = 0
             time.sleep(0.1)
         self.assertEqual(self.status()["state"], "off")
         self.assertEqual(self.status()["procs"], [])
+
+
+class HeadroomTests(unittest.TestCase):
+    """VRAM reserve → --fit-target, RAM check before loading, Whisper on the CPU at the reserve."""
+    GB = 10 ** 9
+
+    def setUp(self):
+        from npukit import config as C, gateway, hw
+        self.tmp = tempfile.TemporaryDirectory()
+        t = Path(self.tmp.name)
+        (t / "big.gguf").write_bytes(b"G")
+        (t / "w.bin").write_bytes(b"W")
+        self.hw, self.saved = hw, (hw.gpu_vram, hw.mem_available, hw.proc_vram, hw.proc_rss_anon)
+        cfg = C.load(reload=True)
+        import copy
+        cfg = copy.deepcopy(cfg)
+        cfg["llamacpp"].update(vram_reserve=0.2, ram_reserve_gb=4, threads=6, overhead_gb=0,
+                               whisper_model=str(t / "w.bin"))
+        cfg["llamacpp"]["models"] = {"big": {"path": str(t / "big.gguf"), "size_gb": 0}}
+        self.eng = gateway.LlamaCppEngine(cfg)
+        self.size = 13 * self.GB  # pretend the model file is 13 GB
+        self.eng.footprint = lambda spec: self.size
+        self.vram = {"total": 16 * self.GB, "used": 7 * self.GB}
+        self.avail = 14 * self.GB
+        hw.gpu_vram = lambda: dict(self.vram)
+        hw.mem_available = lambda: self.avail
+        hw.proc_vram = lambda pid: 6 * self.GB
+        hw.proc_rss_anon = lambda pid: 1 * self.GB
+
+    def tearDown(self):
+        h = self.hw
+        h.gpu_vram, h.mem_available, h.proc_vram, h.proc_rss_anon = self.saved
+        self.tmp.cleanup()
+
+    def test_fit_target_is_the_reserve_and_threads_are_capped(self):
+        argv = self.eng.plan(["chat"], "big", None)[0].argv
+        i = argv.index("--fit-target")
+        self.assertEqual(int(argv[i + 1]), int(16 * self.GB * 0.2) // 1048576)
+        self.assertEqual(argv[argv.index("-t") + 1], "6")
+        self.assertNotIn("-ngl", argv)
+
+    def test_ram_check(self):
+        # GPU room 16 - 7 - 3.2 = 5.8 GB, so 7.2 GB goes to RAM: 14 - 7.2 >= 4 fits
+        self.eng.fits("big", {"path": "x"}, None)
+        self.avail = 10 * self.GB  # 10 - 7.2 < 4: refused, with the numbers in the message
+        with self.assertRaises(RuntimeError) as cm:
+            self.eng.fits("big", {"path": "x"}, None)
+        self.assertIn("keeping 4 GB free", str(cm.exception))
+
+    def test_replaced_chat_server_counts_as_freed(self):
+        from npukit.gateway import Child, Proc
+        self.avail = 10 * self.GB
+        old = Proc("llama", ["chat"], "fast", 1, ["x"])
+        old.proc = type("P", (), {"returncode": None, "pid": 1})()
+        # its 6 GB VRAM and 1 GB RAM come back: room 11.8 GB, 1.2 GB to RAM, 11 GB available
+        self.eng.fits("big", {"path": "x"}, Child([old], None))
+
+    def test_whisper_leaves_the_gpu_at_the_reserve(self):
+        argv = self.eng.plan(["asr"], None, None)[0].argv
+        self.assertNotIn("-ng", argv)
+        self.vram["used"] = 13 * self.GB  # 3 GB free < 3.2 GB reserve
+        p = self.eng.plan(["asr"], None, None)[0]
+        self.assertIn("-ng", p.argv)
+        self.assertEqual(p.note, "CPU")
+        self.assertEqual(p.argv[p.argv.index("-t") + 1], "6")
 
 
 class LanguagePickTests(unittest.TestCase):

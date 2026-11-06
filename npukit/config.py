@@ -27,19 +27,29 @@ DEFAULTS: dict = {
         # each component runs as its own server on port flm_port + 0/1/2 (chat/asr/embed); a GPU
         # has room for all of them, so switching the chat model leaves Whisper loaded
         "max_components": 3,
-        "args": ["-ngl", "999", "-c", "16384", "-np", "1", "--no-webui"],  # every chat server
+        # headroom for other apps (games): llama.cpp keeps vram_reserve of the card free (--fit-target)
+        # and puts what doesn't fit in RAM, MoE experts first; a model whose RAM share would leave less
+        # than ram_reserve_gb available is refused; Whisper runs on the CPU when the GPU is at the reserve
+        "vram_reserve": 0.2,          # fraction of VRAM to keep free; 0 = llama.cpp's 1 GiB margin
+        "ram_reserve_gb": 4,          # 0 = no RAM check
+        "threads": 0,                 # CPU threads for model layers in RAM (and CPU Whisper); 0 = all cores
+        "overhead_gb": 1.0,           # context + work buffers on top of the model files, for the RAM check
+        # every chat server; no -ngl so --fit decides what goes on the GPU
+        "args": ["-c", "16384", "-np", "1", "--no-webui"],
         "whisper_model": "~/.local/share/npukit-engines/models/ggml-large-v3-turbo.bin",
         "whisper_args": ["-l", "auto"],
         "embed_model": "embed-gemma:300m",  # a [llamacpp.models] entry
         "embed_args": ["--embeddings", "-c", "2048", "-ub", "2048", "-b", "2048"],
         "download_timeout": 3600,     # s a first start of an hf = "…" model may take (it downloads)
         # used instead of [models.aliases] when the config file sets none
-        "aliases": {"fast": "qwen3.5:9b", "quality": "gpt-oss:20b", "vision": "qwen3.5:9b"},
+        "aliases": {"fast": "qwen3.5:9b", "quality": "qwen3.6:35b-a3b", "vision": "qwen3.5:9b"},
         # model tag -> GGUF: {path, mmproj} for local files, or {hf = "user/repo[:quant]"} to let
         # llama-server download it (mmproj included) on first use; optional per-model "args"
         "models": {
             "qwen3.5:9b": {"path": "~/.local/share/npukit-engines/models/Qwen3.5-9B-Q4_K_M.gguf",
                            "mmproj": "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf"},
+            # MoE, 3B active: 13.2 GB at UD-IQ3_XXS, splits between VRAM and RAM and stays fast
+            "qwen3.6:35b-a3b": {"path": "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"},
             "qwen3.5:4b": {"hf": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M"},
             "gpt-oss:20b": {"hf": "ggml-org/gpt-oss-20b-GGUF"},
             "embed-gemma:300m": {"hf": "ggml-org/embeddinggemma-300M-GGUF"},

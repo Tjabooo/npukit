@@ -59,6 +59,7 @@ class Proc:
         self.argv = argv
         self.probe = probe            # GET path that answers 200 once the model is loaded
         self.timeout: float | None = None  # load timeout; None = [server] start_timeout
+        self.note = ""                # e.g. "CPU" when Whisper had to leave the GPU to the reserve
         self.proc: asyncio.subprocess.Process | None = None
         self.lines: collections.deque[str] = collections.deque(maxlen=60)
         self.failed = ""
@@ -117,7 +118,7 @@ class FlmEngine:
         self.cfg = cfg
         self.max_components = int(cfg["server"]["max_components"])
 
-    def check(self, need: str, model: str | None) -> None:
+    def check(self, need: str, model: str | None, child: "Child | None" = None) -> None:
         pass  # flm reports unknown tags itself
 
     def plan(self, wanted: list[str], chat_model: str | None, pmode: str) -> list[Proc]:
@@ -175,14 +176,63 @@ class LlamaCppEngine:
             raise RuntimeError(f"model file missing for {tag}: {spec['path']}")
         return spec
 
-    def check(self, need: str, model: str | None) -> None:
+    def check(self, need: str, model: str | None, child: "Child | None" = None) -> None:
         if need == "chat":
-            self.spec(model or "")
+            self.fits(model or "", self.spec(model or ""), child)
         elif need == "embed":
             self.spec(self.lc["embed_model"])
         elif need == "asr" and not C.expand(self.lc["whisper_model"]).exists():
             raise RuntimeError(f"Whisper model missing: {self.lc['whisper_model']} "
                                "(scripts/get-models.sh downloads it)")
+
+    # -- headroom: keep [llamacpp] vram_reserve of the GPU and ram_reserve_gb of RAM for other apps
+    def vram_reserve(self, vram: dict | None) -> int:
+        """Bytes of VRAM to leave free, from [llamacpp] vram_reserve (a fraction of the card)."""
+        frac = float(self.lc.get("vram_reserve", 0) or 0)
+        return int(vram["total"] * frac) if vram and frac > 0 else 0
+
+    def footprint(self, spec: dict) -> int | None:
+        """Bytes a chat server needs (model + projector files + [llamacpp] overhead_gb); None if unknown."""
+        if not spec.get("path"):
+            return int(float(spec["size_gb"]) * 1e9) if spec.get("size_gb") else None
+        files = [C.expand(f) for f in (spec.get("path"), spec.get("mmproj")) if f]
+        return sum(f.stat().st_size for f in files) + int(float(self.lc.get("overhead_gb", 1.0)) * 1e9)
+
+    def fits(self, tag: str, spec: dict, child: "Child | None") -> None:
+        """Refuse a model whose share outside the GPU (whatever doesn't fit above the VRAM reserve)
+        would leave less than ram_reserve_gb of RAM available. The chat server it replaces counts as freed."""
+        keep = float(self.lc.get("ram_reserve_gb", 0) or 0) * 1e9
+        need, avail = self.footprint(spec), hw.mem_available()
+        if not keep or need is None or avail is None:
+            return
+        vram = hw.gpu_vram()
+        old = child.proc_for("chat") if child else None
+        freed_vram = 0
+        if old and old.alive() and old.proc:
+            freed_vram = hw.proc_vram(old.proc.pid)
+            avail += hw.proc_rss_anon(old.proc.pid)
+        room = max(0, vram["total"] - vram["used"] + freed_vram - self.vram_reserve(vram)) if vram else 0
+        in_ram = max(0, need - room)
+        if avail - in_ram < keep:
+            gb = 1e9
+            raise RuntimeError(
+                f"not enough memory for {tag} right now: ~{in_ram / gb:.1f} GB would go to RAM "
+                f"(GPU room {room / gb:.1f} GB after keeping {self.vram_reserve(vram) / gb:.1f} GB free), "
+                f"{avail / gb:.1f} GB available, keeping {keep / gb:.0f} GB free. Close something or use a smaller model")
+
+    def _fit_args(self) -> list[str]:
+        """--fit-target = the VRAM reserve: llama.cpp puts what doesn't fit above it in RAM (MoE experts first)."""
+        reserve = self.vram_reserve(hw.gpu_vram())
+        args = ["--fit", "on", "--fit-target", str(reserve // 1048576)] if reserve else []
+        threads = int(self.lc.get("threads", 0) or 0)
+        return args + (["-t", str(threads)] if threads else [])
+
+    def _whisper_on_gpu(self) -> bool:
+        vram = hw.gpu_vram()
+        if not vram:
+            return True
+        need = C.expand(self.lc["whisper_model"]).stat().st_size + 400 * 1048576  # + work buffers
+        return vram["total"] - vram["used"] - need >= self.vram_reserve(vram)
 
     def _model_args(self, spec: dict) -> list[str]:
         if spec.get("path"):
@@ -201,13 +251,20 @@ class LlamaCppEngine:
                 argv = [os.path.expanduser(self.lc["whisper"]), "-m", str(C.expand(self.lc["whisper_model"])),
                         "--host", "127.0.0.1", "--port", str(port),
                         "--inference-path", "/v1/audio/transcriptions", *map(str, self.lc["whisper_args"])]
-                procs.append(Proc("whisper", ["asr"], None, port, argv, "/health"))
+                gpu = self._whisper_on_gpu()
+                if not gpu:  # the GPU is at its reserve: transcribe on the CPU instead of eating into it
+                    argv.append("-ng")
+                    if int(self.lc.get("threads", 0) or 0):
+                        argv += ["-t", str(int(self.lc["threads"]))]
+                p = Proc("whisper", ["asr"], None, port, argv, "/health")
+                p.note = "" if gpu else "CPU"
+                procs.append(p)
                 continue
             tag = chat_model if comp == "chat" else self.lc["embed_model"]
             spec = self.spec(tag or "")
             extra = self.lc["args"] if comp == "chat" else self.lc["embed_args"]
             argv = [os.path.expanduser(self.lc["server"]), *self._model_args(spec),
-                    "--host", "127.0.0.1", "--port", str(port), "--alias", tag,
+                    "--host", "127.0.0.1", "--port", str(port), "--alias", tag, *self._fit_args(),
                     *map(str, extra), *map(str, spec.get("args", []))]
             p = Proc("llama", [comp], tag if comp == "chat" else None, port, argv, "/health")
             if spec.get("hf") and not spec.get("path"):  # the first start downloads the model
@@ -418,7 +475,7 @@ class Gateway:
         async with self.lock:
             c = self.child
             if not (c and c.has(need, model) and (pmode is None or c.pmode == pmode)):
-                self.engine.check(need, model)  # unknown model / missing file: fail before unloading
+                self.engine.check(need, model, c)  # unknown model, missing file, no room: fail before unloading
                 now, timeout = time.monotonic(), self.idle_timeout()
                 keep = []
                 if c:
@@ -504,7 +561,8 @@ class Gateway:
             "loaded_since": self.loaded_at if c else None,
             "flm_pid": c.proc.pid if c and c.proc else None,
             "procs": [{"kind": p.kind, "components": p.components, "model": p.chat_model, "port": p.port,
-                       "pid": p.proc.pid if p.proc else None} for p in c.procs] if c else [],
+                       "pid": p.proc.pid if p.proc else None, "note": p.note,
+                       "vram_mb": hw.proc_vram(p.proc.pid) // 1048576 if p.proc else 0} for p in c.procs] if c else [],
             "last_tps": self.last_tps,
             "last_error": self.last_error,
             "npu": hw.npu_info(),
@@ -548,9 +606,10 @@ class Gateway:
         tip = [f"{where} · {st}" + (f" · {act}" if act else "")]
         pm = self.engine.uses_pmode
         if c:
+            names = {"asr": "whisper (speech to text)", "embed": "embeddings"}
             tip.append("loaded: " + ", ".join(
-                (c.chat_model if x == "chat" else {"asr": "whisper (speech to text)",
-                                                   "embed": "embeddings"}[x]) for x in c.components))
+                (p.chat_model if x == "chat" else names[x]) + (f" on the {p.note}" if p.note else "")
+                for p in c.procs for x in p.components))
             tip.append((f"pmode {c.pmode} · " if pm else "") + f"unloads after {int(self.idle_timeout())} s idle "
                        f"({'AC' if ac else 'battery'})")
         else:

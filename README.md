@@ -170,6 +170,7 @@ the OpenAI endpoint) works the same; notifications and the bar tooltip say `GPU`
 | Component | Server | Default model |
 |---|---|---|
 | Chat, vision (OCR, describe, translate) | `llama-server` on `flm_port` | Qwen3.5-9B Q4_K_M + mmproj (6.6 GB) |
+| Quality chat (`-m quality`) | same server, swapped in | Qwen3.6-35B-A3B UD-IQ3_XXS (13.2 GB, MoE, 3B active) |
 | Speech to text | `whisper-server` on `flm_port + 1` | Whisper large-v3-turbo (1.6 GB) |
 | Embeddings | `llama-server --embeddings` on `flm_port + 2` | EmbeddingGemma 300M (downloaded on first use) |
 
@@ -178,9 +179,17 @@ server and leaves Whisper warm. A model that isn't configured or whose file is m
 is unloaded. Everything still unloads after `ac_idle_unload` seconds without a request, which gives the VRAM
 back (worth keeping short on a gaming PC).
 
+**Headroom for other apps.** `vram_reserve = 0.2` keeps 20% of the card free: it becomes llama.cpp's
+`--fit-target`, so whatever doesn't fit above it stays in RAM (MoE expert weights first, which is why a
+35B-A3B model still answers quickly with half of it in RAM). Before loading, the gateway checks that the
+RAM share would leave `ram_reserve_gb` (4) available and otherwise refuses with the numbers. Whisper runs on
+the CPU when the GPU is at the reserve. `threads` caps the CPU threads; the service also runs at `Nice=5`
+and `CPUWeight=50`, so a game wins when the CPU is contended. GPU *compute* can't be capped: a reply keeps
+the GPU busy while it is generated (seconds), and the card is idle the rest of the time.
+
 ```sh
 sudo pacman -S llama-cpp whisper-cpp ggml-vulkan   # Arch; elsewhere build both with -DGGML_VULKAN=ON
-scripts/get-models.sh                              # Whisper + Qwen3.5-9B into ~/.local/share/npukit-engines/models
+scripts/get-models.sh                              # Whisper, Qwen3.5-9B, Qwen3.6-35B-A3B (--no-quality skips it)
 mkdir -p ~/.config/npukit && printf '[server]\nbackend = "llamacpp"\n' >> ~/.config/npukit/config.toml
 NPUKIT_INDEX=0 ./install.sh                        # NPUKIT_INDEX=0: no background search indexing
 npu ocr --describe                                 # region → description on the clipboard
@@ -188,7 +197,7 @@ npu ocr --describe                                 # region → description on t
 
 Models are `[llamacpp.models]` entries: `{ path = "….gguf", mmproj = "….gguf" }` for local files or
 `{ hf = "user/repo:quant" }` to let llama-server download them (vision projector included). `[llamacpp] args`
-are passed to every chat server (default `-ngl 999 -c 16384 -np 1`: all layers on the GPU, 16k context, one slot).
+are passed to every chat server (default `-c 16384 -np 1`: 16k context, one slot; `--fit` places the layers).
 See [`config.example.toml`](config.example.toml).
 
 ## Benchmarks

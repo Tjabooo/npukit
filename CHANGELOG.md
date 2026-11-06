@@ -10,6 +10,11 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
   fail before anything is unloaded. `scripts/get-models.sh` downloads the defaults (Qwen3.5-9B + vision
   projector, Whisper large-v3-turbo). `NPUKIT_INDEX=0 ./install.sh` skips the search index timer.
 - `npu ocr --describe` / `--ask`: the notification says Describe / Answer instead of OCR.
+- GPU backend headroom: `[llamacpp] vram_reserve` (20%) becomes llama.cpp's `--fit-target` (no more
+  `-ngl 999`, which forced models that didn't fit into VRAM and spilled), `ram_reserve_gb` (4) refuses
+  loads that would starve RAM, `threads` caps CPU threads, Whisper falls back to the CPU at the reserve,
+  and npud.service runs with `CPUWeight=50`. `npu status` shows VRAM/RAM per server and overall.
+- GPU `quality` is now Qwen3.6-35B-A3B (UD-IQ3_XXS, 13.2 GB) instead of gpt-oss-20b.
 
 - `npu ocr --translate [LANG]`: read a screen region and translate it (default `[ocr] translate_to`,
   English); also in `npu menu`.

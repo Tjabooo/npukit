@@ -17,13 +17,18 @@ server = "llama-server"      # llama.cpp (Arch: pacman -S llama-cpp ggml-vulkan)
 whisper = "whisper-server"   # whisper.cpp (Arch: pacman -S whisper-cpp)
 label = "GPU"                # shown in notifications, the bar tooltip and `npu status`
 max_components = 3           # chat + Whisper + embeddings all stay loaded on a GPU
-args = ["-ngl", "999", "-c", "16384", "-np", "1", "--no-webui"]   # every chat llama-server
+vram_reserve = 0.2           # keep 20% of VRAM free for other apps: llama.cpp --fit-target; what doesn't fit
+                             # goes to RAM (MoE experts first); Whisper moves to the CPU at the reserve
+ram_reserve_gb = 4           # refuse to load a model whose RAM share would leave less than this available
+threads = 0                  # CPU threads for whatever runs on the CPU (0 = all cores), e.g. 6 of 8 for headroom
+args = ["-c", "16384", "-np", "1", "--no-webui"]   # every chat llama-server (no -ngl: --fit decides)
 whisper_model = "~/.local/share/npukit-engines/models/ggml-large-v3-turbo.bin"
 whisper_args = ["-l", "auto"]
 embed_model = "embed-gemma:300m"
-# With this backend and no [models.aliases] in this file: fast = vision = "qwen3.5:9b", quality = "gpt-oss:20b".
+# With this backend and no [models.aliases] in this file: fast = vision = "qwen3.5:9b", quality = "qwen3.6:35b-a3b".
 # [llamacpp.models]          # tag = { path = "….gguf", mmproj = "….gguf" } or { hf = "user/repo:quant" }
 # "qwen3.5:9b" = { path = "~/.local/share/npukit-engines/models/Qwen3.5-9B-Q4_K_M.gguf", mmproj = "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf" }
+# "qwen3.6:35b-a3b" = { path = "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf" }
 # "gpt-oss:20b" = { hf = "ggml-org/gpt-oss-20b-GGUF", args = ["-c", "32768"] }
 
 [models]
@@ -32,7 +37,7 @@ default = "fast"             # used when a request names no model
 # With backend = "llamacpp" the values must be [llamacpp.models] tags.
 # [models.aliases]
 # fast = "qwen3.5:4b"        # everyday chat/coding (vision too)      llamacpp default: qwen3.5:9b
-# quality = "gpt-oss:20b"    # slower, better answers                  llamacpp default: gpt-oss:20b
+# quality = "gpt-oss:20b"    # slower, better answers                  llamacpp default: qwen3.6:35b-a3b
 # vision = "qwen3vl-it:4b"   # OCR / describing screenshots            llamacpp default: qwen3.5:9b
 
 [power]

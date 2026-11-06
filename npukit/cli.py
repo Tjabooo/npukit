@@ -77,6 +77,19 @@ def _status_llamacpp(cfg: dict, st: dict) -> int:
         print(f"{name:<9} {path or 'not found: ' + lc[key]}")
     wm = C.expand(lc["whisper_model"])
     print(f"stt       {wm if wm.exists() else 'missing: ' + str(wm)}")
+    from . import hw
+    gb, vram, avail = 1e9, hw.gpu_vram(), hw.mem_available()
+    for p in st.get("procs", []):
+        what = p.get("model") or {"asr": "whisper", "embed": "embeddings"}.get(p["components"][0], "?")
+        print(f"  {what:<18} pid {p['pid']}  ·  " + (f"on the {p['note']}" if p.get("note")
+                                                     else f"{p.get('vram_mb', 0) / 1024:.1f} GiB VRAM"))
+    frac = float(lc.get("vram_reserve", 0) or 0)
+    if vram:
+        print(f"vram      {vram['used'] / gb:.1f} / {vram['total'] / gb:.1f} GB used"
+              + (f"  ·  keeps {vram['total'] * frac / gb:.1f} GB ({frac:.0%}) free" if frac else ""))
+    if avail is not None:
+        keep = float(lc.get("ram_reserve_gb", 0) or 0)
+        print(f"ram       {avail / gb:.1f} GB available" + (f"  ·  keeps {keep:.0f} GB free" if keep else ""))
     print(f"runs on   {C.engine_label(cfg)} (llama.cpp / whisper.cpp)")
     if st.get("last_tps"):
         print(f"last      {st['last_tps']:.1f} tok/s")
