@@ -4,6 +4,12 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+- `npu chat` (conversation) and file access for `npu ask` / `npu chat`: with folders in `[tools] read`
+  (or `--read PATH`, `/read PATH`) the model calls read-only tools (list_dir, find_files, search_text,
+  read_file) before answering. Outside paths, symlink escapes and `[tools] deny` (keys, `.env`, `.ssh/`, …)
+  are refused. Falls back to a plain answer on servers without tool calls.
+- GPU quality model gets a 32k context for the files it reads.
+
 - `npu translate`: an eww overlay to translate a message you write. Language chips (recent first, any
   language can be typed), Enter translates and copies, Enter again types the translation into the window
   underneath (wtype). Own eww instance, colours from `[translate.colors]`, optional `on_open`/`on_close`

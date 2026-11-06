@@ -45,6 +45,58 @@ class ChunkTests(unittest.TestCase):
         self.assertEqual(chunk("", 40, 5), [])
 
 
+class FileToolTests(unittest.TestCase):
+    """Read-only access, only inside granted folders, never the deny list."""
+
+    def setUp(self):
+        from npukit import tools
+        self.tmp = tempfile.TemporaryDirectory()
+        t = Path(self.tmp.name)
+        self.root = t / "proj"
+        (self.root / "src" / "deep").mkdir(parents=True)
+        (self.root / "node_modules" / "x").mkdir(parents=True)
+        (self.root / "README.md").write_text("# Helix\nA game about hollows.\n")
+        (self.root / "src" / "main.lua").write_text("local hollow = 1\nprint(hollow)\n")
+        (self.root / "src" / "deep" / "a.txt").write_text("x\n" * 1000)
+        (self.root / "node_modules" / "x" / "hollow.js").write_text("hollow\n")
+        (self.root / ".env").write_text("TOKEN=hollow-secret\n")
+        (self.root / "blob.bin").write_bytes(b"\0\1\2hollow")
+        (t / "outside.txt").write_text("not yours hollow\n")
+        (self.root / "escape").symlink_to(t / "outside.txt")
+        self.f = tools.Files([str(self.root)])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_outside_symlink_and_deny_list_are_refused(self):
+        run = self.f.run
+        self.assertIn("outside the folders", run("read_file", {"path": str(Path(self.tmp.name) / "outside.txt")}))
+        self.assertIn("outside the folders", run("read_file", {"path": "../outside.txt"}))
+        self.assertIn("outside the folders", run("read_file", {"path": "escape"}))   # symlink out
+        self.assertIn("deny list", run("read_file", {"path": ".env"}))
+        self.assertIn("binary", run("read_file", {"path": "blob.bin"}))
+        self.assertIn("no folders are granted", __import__("npukit.tools", fromlist=["Files"]).Files([]).run(
+            "list_dir", {"path": "~"}))
+
+    def test_list_read_search_find(self):
+        run = self.f.run
+        listing = run("list_dir", {"path": "", "depth": 2})
+        self.assertIn("src/", listing)
+        self.assertIn("main.lua", listing)
+        self.assertIn("node_modules/  (not descended)", listing)
+        self.assertNotIn(".env", listing)
+        page = run("read_file", {"path": "src/deep/a.txt", "offset": 10, "limit": 5})
+        self.assertIn("lines 10-14 of 1000", page)
+        self.assertIn("offset=15", page)
+        hits = run("search_text", {"pattern": "hollow"})
+        self.assertIn("README.md:2:", hits)
+        self.assertIn("main.lua:1:", hits)
+        for leak in ("hollow-secret", "node_modules", "outside.txt"):
+            self.assertNotIn(leak, hits)
+        self.assertIn("src/main.lua", run("find_files", {"glob": "*.lua"}))
+        self.assertIn("no tool", run("delete_file", {"path": "README.md"}))
+
+
 class GatewayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -308,6 +360,17 @@ signal = 0
             self.client.chat([{"role": "user", "content": "hi"}], "no-such-model")
         self.assertIn("unknown model", str(cm.exception))
         self.assertEqual(self.pids()["chat"], pids["chat"])
+
+    def test_45_chat_reads_a_granted_file(self):
+        from npukit import agent, tools
+        d = Path(self.tmp.name, "proj")
+        d.mkdir(exist_ok=True)
+        (d / "notes.md").write_text("helix notes\nline two\n")
+        s = agent.Session("fast", tools.Files([str(d)]), quiet=True)
+        answer = s.ask("read notes please")
+        self.assertIn("helix notes", answer)
+        self.assertEqual([m["role"] for m in s.messages], ["system", "user", "assistant", "tool", "assistant"])
+        self.assertIn("proj", s.messages[0]["content"])
 
     def test_5_bar_says_gpu_and_idle_unload(self):
         self.client.chat([{"role": "user", "content": "hi"}], "fast")

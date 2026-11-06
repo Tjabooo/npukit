@@ -82,7 +82,8 @@ npu status                 gateway, loaded models, NPU runtime state, index size
 npu models                 aliases + installed NPU models
 npu load quality           load a model now (fast | quality | vision | any flm tag | stt | embed)
 npu stop                   free the NPU
-npu ask "question"         one-shot answer (add -m quality, --think)
+npu ask "question"         one-shot answer (add -m quality, --think, --read PATH)
+npu chat                   conversation; reads the folders in [tools] read (/read PATH adds one, /help)
 npu dictate                toggle recording (also: start | stop | cancel)
 npu transcribe file.wav    speech to text for a file
 npu ocr [--describe]       screen region → text on the clipboard
@@ -148,6 +149,24 @@ Classes: `off`, `loading`, `ready`, `busy` (plus `stt`/`ocr`/`index` while a too
 The gateway rewrites the file and sends `SIGRTMIN+16` to waybar on every change, so the bar never polls.
 Next to it, `status.json` holds the same state for scripts: `state`, `activity`, `components`, `chat_model`,
 `pmode`, `power`, `last_tps`, `updated`.
+
+### Reading your files
+
+`npu ask` and `npu chat` can read files when you grant folders. The model gets four read-only tools
+(list a folder, find files, search text, read a file in pages) and uses them before it answers; it can't write,
+delete or run anything. Paths outside the granted folders, symlinks that lead out of them and anything on
+`[tools] deny` (keys, `.env`, `.ssh/`, browser profiles, …) are refused.
+
+```toml
+[tools]
+read = ["~/Projects", "~/Documents"]   # permanent; `--read PATH` or `/read PATH` adds one for a session
+model = "quality"                       # used with file access unless -m is given
+```
+
+```sh
+npu ask "what does ~/Projects/helix-hollow do?"
+npu chat --read ~/notes
+```
 
 ## Configuration
 

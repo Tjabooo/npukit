@@ -52,7 +52,17 @@ class H(BaseHTTPRequestHandler):
                 return self._send({"error": "not found"}, 404)
             return self._send({"text": f" whisper {os.getpid()} heard {len(raw)} bytes"})
         if self.path == "/v1/chat/completions":
-            json.loads(raw)
+            req = json.loads(raw)
+            last = req["messages"][-1]
+            if req.get("tools") and last["role"] == "user" and "read notes" in last["content"]:
+                return self._send({"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "c1", "type": "function",
+                     "function": {"name": "read_file", "arguments": json.dumps({"path": "notes.md"})}}]}}],
+                    "usage": {"completion_tokens": 5}, "timings": {"predicted_per_second": 88.5}})
+            if last["role"] == "tool":
+                return self._send({"choices": [{"message": {"role": "assistant",
+                                                            "content": "saw: " + last["content"]}}],
+                                   "usage": {"completion_tokens": 4}, "timings": {"predicted_per_second": 88.5}})
             return self._send({"choices": [{"message": {"role": "assistant",
                                                         "content": f"alias={a.alias} pid={os.getpid()} "
                                                                    f"vision={bool(a.mmproj)}"}}],

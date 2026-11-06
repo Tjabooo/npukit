@@ -49,7 +49,8 @@ DEFAULTS: dict = {
             "qwen3.5:9b": {"path": "~/.local/share/npukit-engines/models/Qwen3.5-9B-Q4_K_M.gguf",
                            "mmproj": "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf"},
             # MoE, 3B active: 13.2 GB at UD-IQ3_XXS, splits between VRAM and RAM and stays fast
-            "qwen3.6:35b-a3b": {"path": "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"},
+            "qwen3.6:35b-a3b": {"path": "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+                                "args": ["-c", "32768"]},  # room for files it reads (hybrid attention: +0.3 GB)
             "qwen3.5:4b": {"hf": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M"},
             "gpt-oss:20b": {"hf": "ggml-org/gpt-oss-20b-GGUF"},
             "embed-gemma:300m": {"hf": "ggml-org/embeddinggemma-300M-GGUF"},
@@ -118,6 +119,20 @@ DEFAULTS: dict = {
         "width": 760,
         "colors": {"bg": "#101216", "panel": "#181b21", "line": "#2a2f3a", "fg": "#dfe3ea", "dim": "#6b7280",
                    "accent": "#7aa2f7", "accent2": "#f5a97f", "error": "#ed6a5e"},
+    },
+    "tools": {
+        # folders `npu ask` / `npu chat` may read (read-only: list, find, search, read); empty = no file access.
+        # `--read PATH` grants one more for a single call, `/read PATH` inside npu chat.
+        "read": [],
+        # never readable, even inside a granted folder: file-name globs, or "name/" for a folder anywhere
+        "deny": [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx", "*.keystore", "id_rsa*",
+                 "id_ed25519*", "id_ecdsa*", ".netrc", ".git-credentials", ".npmrc", ".pypirc",
+                 "credentials.json", "token.json", "Cookies", "Login Data", ".ssh/", ".gnupg/", ".aws/",
+                 ".password-store/", "keyrings/", ".mozilla/"],
+        "skip_dirs": [],              # not walked by find/search, on top of [search] exclude_dirs
+        "model": "quality",           # used with file access when no -m is given
+        "max_steps": 16,              # tool rounds per question
+        "context_chars": 48000,       # tool results kept in the conversation (older ones are dropped)
     },
     "ui": {
         "menu_theme": "",             # rofi -theme for `npu menu` (empty = rofi's default)

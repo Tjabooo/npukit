@@ -148,6 +148,10 @@ def cmd_stop(args) -> int:
 
 
 def cmd_ask(args) -> int:
+    t = C.load()["tools"]
+    if not args.no_files and (t.get("read") or args.read):  # file access: the tool-calling loop
+        from . import agent
+        return agent.ask_main(args)
     q = " ".join(args.prompt) or sys.stdin.read()
     extra = {} if args.think else {"chat_template_kwargs": {"enable_thinking": False}}
     t0 = time.monotonic()
@@ -201,12 +205,18 @@ def main(argv=None) -> int:
     s = sub.add_parser("stop", help="unload everything from the NPU")
     s.set_defaults(fn=cmd_stop)
 
-    s = sub.add_parser("ask", help="one-shot question to a local model")
-    s.add_argument("prompt", nargs="*")
-    s.add_argument("-m", "--model", default=None)
-    s.add_argument("--think", action="store_true", help="let reasoning models think first")
-    s.add_argument("--max-tokens", type=int, default=1024)
-    s.set_defaults(fn=cmd_ask)
+    for name, help_ in (("ask", "one-shot question to a local model (reads granted folders when asked)"),
+                        ("chat", "conversation with a local model that can read granted folders")):
+        s = sub.add_parser(name, help=help_)
+        s.add_argument("prompt", nargs="*")
+        s.add_argument("-m", "--model", default=None)
+        s.add_argument("--think", action="store_true", help="let reasoning models think first")
+        s.add_argument("--max-tokens", type=int, default=4096 if name == "chat" else 2048)
+        s.add_argument("-r", "--read", action="append", metavar="PATH",
+                       help="also let it read this folder (repeatable); [tools] read in the config is permanent")
+        s.add_argument("--no-files", action="store_true", help="no file access, even with [tools] read set")
+        s.set_defaults(fn=cmd_ask if name == "ask" else
+                       (lambda a: __import__("npukit.agent", fromlist=["chat_main"]).chat_main(a)))
 
     s = sub.add_parser("bench", help="tokens/s + package/system power")
     s.add_argument("models", nargs="*", help="NPU models or aliases (default: fast)")
