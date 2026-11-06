@@ -307,6 +307,11 @@ class Gateway:
             p.proc = await asyncio.create_subprocess_exec(
                 *p.argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+        except FileNotFoundError:
+            hint = {"flm": "install FastFlowLM", "llama": "install llama.cpp (Arch: llama-cpp ggml-vulkan)",
+                     "whisper": "install whisper.cpp (Arch: whisper-cpp)"}[p.kind]
+            p.failed = f"{os.path.basename(p.argv[0])} not found: {hint}"
+            return False
         except OSError as e:
             p.failed = f"{p.argv[0]}: {e.strerror or e}"
             return False
