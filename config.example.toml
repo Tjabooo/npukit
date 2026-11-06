@@ -48,6 +48,7 @@ translate_model = "fast"     # chat model that translates the text the vision mo
 menu_theme = ""              # rofi -theme for `npu menu`, e.g. "~/.config/rofi/npu.rasi"
 menu_close_wait = 0.45       # seconds the menu gets to fade out before a region selection freezes the screen
 search_theme = ""            # rofi -theme for `npu search --rofi`
+lang_theme = ""              # rofi -theme for the `npu ocr --pick` language list (empty = menu_theme)
 
 [search]
 roots = ["~/workspace", "~/Documents"]

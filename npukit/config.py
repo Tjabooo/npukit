@@ -62,6 +62,7 @@ DEFAULTS: dict = {
     "ui": {
         "menu_theme": "",             # rofi -theme for `npu menu` (empty = rofi's default)
         "search_theme": "",           # rofi -theme for `npu search --rofi`
+        "lang_theme": "",             # rofi -theme for the `npu ocr --pick` language list (empty = menu_theme)
         "menu_close_wait": 0.45,      # s to let the menu's close animation finish before a region pick
     },
     "search": {

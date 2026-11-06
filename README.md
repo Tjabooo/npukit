@@ -17,7 +17,8 @@ screenshot OCR and semantic search over your notes and code. All of it runs on t
 - **Dictation** (`npu dictate`): press a key, talk, press again. The recorder starts at once and Whisper loads on
   the NPU while you talk. The text is typed into the focused app (`wtype`) and copied to the clipboard.
 - **OCR** (`npu ocr`): select a screen region; a vision model on the NPU transcribes it to the clipboard.
-  `--translate [LANG]` also translates it (default English) with the chat model, still on the NPU.
+  `--translate [LANG]` also translates it (default English) with the chat model, still on the NPU;
+  `--pick` first opens a searchable language list (recent ones on top, any unlisted language can be typed).
   `--describe` or `--ask "…"` asks about the image instead.
 - **Semantic search** (`npu index`, `npu search`): EmbeddingGemma on the NPU, an incremental SQLite index
   (git repos index tracked and untracked-but-not-ignored files), a systemd timer to keep it fresh,
@@ -78,6 +79,7 @@ npu dictate                toggle recording (also: start | stop | cancel)
 npu transcribe file.wav    speech to text for a file
 npu ocr [--describe]       screen region → text on the clipboard
 npu ocr --translate [sv]   screen region → text translated (default English) on the clipboard
+npu ocr --pick             choose the language in a searchable rofi list, then the region
 npu index [--full]         update the search index
 npu search "query"         semantic search (--rofi for the picker)
 npu menu                   rofi menu with all of the above
@@ -93,7 +95,7 @@ FastFlowLM tag (Lemonade-style names like `qwen3.5-4b-FLM` work too).
 ```lua
 local npu = os.getenv("HOME") .. "/.local/bin/npu "
 hl.bind("SUPER + SHIFT + Print", hl.dsp.exec_cmd(npu .. "ocr"))           -- region → text
-hl.bind("SUPER + CTRL + Print",  hl.dsp.exec_cmd(npu .. "ocr --translate")) -- region → translated text
+hl.bind("SUPER + CTRL + Print",  hl.dsp.exec_cmd(npu .. "ocr --pick"))      -- pick language, region → translated text
 hl.bind("SUPER + ALT + D",       hl.dsp.exec_cmd(npu .. "dictate"))       -- dictate toggle
 hl.bind("SUPER + ALT + S",       hl.dsp.exec_cmd(npu .. "search --rofi")) -- semantic search
 ```

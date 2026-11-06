@@ -81,6 +81,7 @@ db = "{t / 'index.sqlite'}"
         os.chmod(ROOT / "tests" / "fake_flm.py", 0o755)
         cls.env = dict(os.environ, NPUKIT_CONFIG=str(t / "config.toml"), PYTHONPATH=str(ROOT))
         os.environ["NPUKIT_CONFIG"] = str(t / "config.toml")
+        os.environ["XDG_STATE_HOME"] = str(t / "state")  # recent translate languages etc.
         cls.proc = subprocess.Popen([sys.executable, "-m", "npukit", "serve"], env=cls.env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         from npukit import client, config as C
@@ -184,6 +185,41 @@ db = "{t / 'index.sqlite'}"
             self.assertEqual(ocr.main(ns), 0)
         self.assertIn("model=", out.getvalue())
         self.assertIn("---", err.getvalue())   # original printed before the translation
+
+
+class LanguagePickTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = self.tmp.name
+
+    def tearDown(self):
+        if self.env is None:
+            os.environ.pop("XDG_STATE_HOME", None)
+        else:
+            os.environ["XDG_STATE_HOME"] = self.env
+        self.tmp.cleanup()
+
+    def test_recent_first_then_default_then_a_to_z(self):
+        from npukit import ocr
+        ocr.remember_language("German")
+        ocr.remember_language("Klingon")
+        ocr.remember_language("german")  # same language: moves up, no duplicate
+        self.assertEqual(ocr.recent_languages(), ["german", "Klingon"])
+        rows, n = ocr.picker_rows(ocr.recent_languages(), "English")
+        self.assertEqual(n, 2)
+        self.assertEqual([lang for _, lang in rows[:4]], ["german", "Klingon", "English", "Arabic"])
+        self.assertIn("sv", dict((lang, text) for text, lang in rows)["Swedish"])
+        self.assertEqual(len([1 for _, lang in rows if lang.lower() == "german"]), 1)
+
+    def test_parse_pick(self):
+        from npukit import ocr
+        rows, _ = ocr.picker_rows([], "English")
+        self.assertEqual(ocr.parse_pick(0, "0\t" + rows[0][0] + "\n", rows), "English")
+        self.assertEqual(ocr.parse_pick(0, "-1\tsv\n", rows), "Swedish")      # typed code
+        self.assertEqual(ocr.parse_pick(0, "-1\tPirate\n", rows), "Pirate")   # typed, not listed
+        self.assertIsNone(ocr.parse_pick(1, "", rows))                          # Esc
+        self.assertIsNone(ocr.parse_pick(0, "-1\t \n", rows))
 
 
 if __name__ == "__main__":
