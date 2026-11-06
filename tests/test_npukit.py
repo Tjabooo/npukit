@@ -187,6 +187,143 @@ db = "{t / 'index.sqlite'}"
         self.assertIn("---", err.getvalue())   # original printed before the translation
 
 
+class LlamaCppGatewayTests(unittest.TestCase):
+    """The GPU backend: a llama-server per chat model and a whisper-server, swapped independently."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        t = Path(cls.tmp.name)
+        cls.port = free_port()
+        fake = ROOT / "tests" / "fake_llama.py"
+        os.chmod(fake, 0o755)
+        for f in ("q9.gguf", "mm.gguf", "small.gguf", "whisper.bin"):
+            (t / f).write_bytes(b"GGUF")
+        cls.cfg_path = t / "config.toml"
+        cls.cfg_path.write_text(f"""
+[server]
+listen = "127.0.0.1:{cls.port}"
+backend = "llamacpp"
+flm_port = {free_port()}
+start_timeout = 20
+[llamacpp]
+server = "{fake}"
+whisper = "{fake}"
+whisper_model = "{t / 'whisper.bin'}"
+[llamacpp.models]
+"qwen3.5:9b" = {{ path = "{t / 'q9.gguf'}", mmproj = "{t / 'mm.gguf'}" }}
+small = {{ path = "{t / 'small.gguf'}" }}
+gone = {{ path = "{t / 'missing.gguf'}" }}
+[power]
+ac_idle_unload = 3
+[bar]
+file = "{t / 'bar.json'}"
+signal = 0
+""")
+        cls.old_cfg = os.environ.get("NPUKIT_CONFIG")
+        env = dict(os.environ, NPUKIT_CONFIG=str(cls.cfg_path), PYTHONPATH=str(ROOT))
+        os.environ["NPUKIT_CONFIG"] = str(cls.cfg_path)
+        cls.proc = subprocess.Popen([sys.executable, "-m", "npukit", "serve"], env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        from npukit import client, config as C
+        C.load(reload=True)
+        cls.client = client
+        for _ in range(100):
+            try:
+                client.call("/npu/status", timeout=1)
+                break
+            except client.ApiError:
+                time.sleep(0.1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        cls.proc.wait(10)
+        if cls.old_cfg is None:
+            os.environ.pop("NPUKIT_CONFIG", None)
+        else:
+            os.environ["NPUKIT_CONFIG"] = cls.old_cfg
+        from npukit import config as C
+        C.load(reload=True)
+        cls.tmp.cleanup()
+
+    def status(self):
+        return self.client.call("/npu/status", timeout=5)
+
+    def pids(self):
+        return {p["components"][0]: p["pid"] for p in self.status()["procs"]}
+
+    def test_0_config_uses_gpu_aliases(self):
+        from npukit import config as C
+        cfg = C.load(reload=True)
+        self.assertEqual(C.backend(cfg), "llamacpp")
+        self.assertEqual(C.engine_label(cfg), "GPU")
+        self.assertEqual(C.resolve_model("fast", cfg), "qwen3.5:9b")
+        # one model entry from the file, the defaults kept beside it
+        self.assertIn("gpt-oss:20b", cfg["llamacpp"]["models"])
+        self.assertNotIn("hf", cfg["llamacpp"]["models"]["qwen3.5:9b"])
+
+    def test_1_chat_with_vision_projector(self):
+        out = self.client.chat([{"role": "user", "content": "hi"}], "fast")
+        text = out["choices"][0]["message"]["content"]
+        self.assertIn("alias=qwen3.5:9b", text)
+        self.assertIn("vision=True", text)
+        st = self.status()
+        self.assertEqual(st["components"], ["chat"])
+        self.assertEqual(st["backend"], "llamacpp")
+        self.assertIsNone(st["pmode"])
+        self.assertEqual(st["last_tps"], 88.5)
+
+    def test_2_whisper_joins_without_restarting_chat(self):
+        self.client.chat([{"role": "user", "content": "hi"}], "fast")
+        before = self.pids()["chat"]
+        text = self.client.transcribe(b"RIFF....fake")
+        self.assertIn("whisper", text)
+        self.assertEqual(sorted(self.status()["components"]), ["asr", "chat"])
+        self.assertEqual(self.pids()["chat"], before)
+
+    def test_3_switching_chat_model_keeps_whisper(self):
+        self.client.transcribe(b"RIFF....fake")
+        self.client.chat([{"role": "user", "content": "hi"}], "fast")
+        pids = self.pids()
+        out = self.client.chat([{"role": "user", "content": "hi"}], "small")
+        self.assertIn("alias=small", out["choices"][0]["message"]["content"])
+        self.assertIn("vision=False", out["choices"][0]["message"]["content"])
+        after = self.pids()
+        self.assertEqual(after["asr"], pids["asr"])
+        self.assertNotEqual(after["chat"], pids["chat"])
+
+    def test_4_bad_models_fail_before_unloading(self):
+        self.client.chat([{"role": "user", "content": "hi"}], "fast")
+        pids = self.pids()
+        with self.assertRaises(self.client.ApiError) as cm:
+            self.client.chat([{"role": "user", "content": "hi"}], "gone")
+        self.assertIn("missing", str(cm.exception))
+        with self.assertRaises(self.client.ApiError) as cm:
+            self.client.chat([{"role": "user", "content": "hi"}], "no-such-model")
+        self.assertIn("unknown model", str(cm.exception))
+        self.assertEqual(self.pids()["chat"], pids["chat"])
+
+    def test_5_bar_says_gpu_and_idle_unload(self):
+        self.client.chat([{"role": "user", "content": "hi"}], "fast")
+        for _ in range(50):
+            bar = json.loads(Path(self.tmp.name, "bar.json").read_text())
+            if "busy" not in bar["class"]:
+                break
+            time.sleep(0.02)
+        self.assertIn("qwen3.5 9b", bar["text"])
+        self.assertTrue(bar["tooltip"].startswith("GPU · "))
+        self.assertNotIn("pmode", bar["tooltip"])
+        st = json.loads(Path(self.tmp.name, "status.json").read_text())
+        self.assertEqual(st["runs_on"], "GPU")
+        for _ in range(60):
+            if self.status()["state"] == "off":
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.status()["state"], "off")
+        self.assertEqual(self.status()["procs"], [])
+
+
 class LanguagePickTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -16,6 +16,34 @@ DEFAULTS: dict = {
         "max_components": 2,          # chat model + 1 helper fits on an XDNA2 NPU; all three do not
         "exit_after": 60,             # socket-activated gateway exits after this long with nothing loaded
         "start_timeout": 180,
+        # flm = FastFlowLM on the XDNA2 NPU; llamacpp = llama.cpp (llama-server) + whisper.cpp
+        # (whisper-server) on a GPU via Vulkan/ROCm/CUDA, or the CPU, for machines without an NPU
+        "backend": "flm",
+    },
+    "llamacpp": {
+        "server": "llama-server",     # llama.cpp server binary (chat, vision, embeddings)
+        "whisper": "whisper-server",  # whisper.cpp server binary (speech to text)
+        "label": "GPU",               # where it runs, shown in notifications and `npu status`
+        # each component runs as its own server on port flm_port + 0/1/2 (chat/asr/embed); a GPU
+        # has room for all of them, so switching the chat model leaves Whisper loaded
+        "max_components": 3,
+        "args": ["-ngl", "999", "-c", "16384", "-np", "1", "--no-webui"],  # every chat server
+        "whisper_model": "~/.local/share/npukit-engines/models/ggml-large-v3-turbo.bin",
+        "whisper_args": ["-l", "auto"],
+        "embed_model": "embed-gemma:300m",  # a [llamacpp.models] entry
+        "embed_args": ["--embeddings", "-c", "2048", "-ub", "2048", "-b", "2048"],
+        "download_timeout": 3600,     # s a first start of an hf = "…" model may take (it downloads)
+        # used instead of [models.aliases] when the config file sets none
+        "aliases": {"fast": "qwen3.5:9b", "quality": "gpt-oss:20b", "vision": "qwen3.5:9b"},
+        # model tag -> GGUF: {path, mmproj} for local files, or {hf = "user/repo[:quant]"} to let
+        # llama-server download it (mmproj included) on first use; optional per-model "args"
+        "models": {
+            "qwen3.5:9b": {"path": "~/.local/share/npukit-engines/models/Qwen3.5-9B-Q4_K_M.gguf",
+                           "mmproj": "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf"},
+            "qwen3.5:4b": {"hf": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M"},
+            "gpt-oss:20b": {"hf": "ggml-org/gpt-oss-20b-GGUF"},
+            "embed-gemma:300m": {"hf": "ggml-org/embeddinggemma-300M-GGUF"},
+        },
     },
     "models": {
         # aliases usable as "model" in any request; anything else is passed to flm as a tag
@@ -98,10 +126,12 @@ def config_path() -> Path:
     return Path(os.environ.get("NPUKIT_CONFIG", os.path.join(base, "npukit", "config.toml")))
 
 
-def _merge(base: dict, over: dict) -> dict:
+def _merge(base: dict, over: dict, path: tuple = ()) -> dict:
     for k, v in over.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict) and k != "aliases":
-            _merge(base[k], v)
+        # alias tables and single model entries replace the default; everything else merges
+        flat = k == "aliases" or path == ("llamacpp", "models")
+        if isinstance(v, dict) and isinstance(base.get(k), dict) and not flat:
+            _merge(base[k], v, path + (k,))
         else:
             base[k] = v
     return base
@@ -113,11 +143,27 @@ def load(reload: bool = False) -> dict:
         return _cache
     cfg = copy.deepcopy(DEFAULTS)
     p = config_path()
+    user: dict = {}
     if p.exists():
         with open(p, "rb") as f:
-            _merge(cfg, tomllib.load(f))
+            user = tomllib.load(f)
+        _merge(cfg, user)
+    if backend(cfg) == "llamacpp" and "aliases" not in user.get("models", {}):
+        cfg["models"]["aliases"] = dict(cfg["llamacpp"]["aliases"])
     _cache = cfg
     return cfg
+
+
+def backend(cfg: dict | None = None) -> str:
+    cfg = cfg or load()
+    return "llamacpp" if str(cfg["server"].get("backend", "flm")).lower() in ("llamacpp", "llama.cpp", "llama") \
+        else "flm"
+
+
+def engine_label(cfg: dict | None = None) -> str:
+    """Where the models run, for messages: "NPU", or [llamacpp] label (default "GPU")."""
+    cfg = cfg or load()
+    return (cfg["llamacpp"].get("label") or "GPU") if backend(cfg) == "llamacpp" else "NPU"
 
 
 def expand(p: str) -> Path:

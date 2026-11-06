@@ -27,16 +27,22 @@ def cmd_status(args) -> int:
         print(json.dumps(st, indent=1))
         return 0
     npu = st.get("npu", {})
+    cfg = C.load()
+    gpu = C.backend(cfg) == "llamacpp"
     print(f"gateway   {C.base_url()}  ·  {st['state']}" + (f" ({st['activity']})" if st.get("activity") else ""))
     if st.get("components"):
         comps = [st["chat_model"] if c == "chat" else {"asr": "whisper", "embed": "embeddings"}[c]
                  for c in st["components"]]
         since = time.time() - (st.get("loaded_since") or time.time())
-        print(f"loaded    {', '.join(comps)}  ·  pmode {st['pmode']}  ·  up {since:.0f}s  ·  pid {st.get('flm_pid')}")
+        pids = ",".join(str(p["pid"]) for p in st.get("procs", [])) or st.get("flm_pid")
+        print(f"loaded    {', '.join(comps)}  ·  " + (f"pmode {st['pmode']}  ·  " if st.get("pmode") else "")
+              + f"up {since:.0f}s  ·  pid {pids}")
     else:
         print("loaded    nothing")
     if "idle_unload" in st:
         print(f"power     {st['power']}  ·  unload after {st['idle_unload']:.0f}s idle")
+    if gpu:
+        return _status_llamacpp(cfg, st)
     if npu.get("present"):
         print(f"npu       {npu['pci']}  fw {npu['firmware']}  ·  {npu['runtime']}  ·  "
               f"active {npu['active_ms'] / 1000:.0f}s since boot")
@@ -62,12 +68,40 @@ def cmd_status(args) -> int:
     return 0
 
 
+def _status_llamacpp(cfg: dict, st: dict) -> int:
+    import shutil
+    from . import search
+    lc = cfg["llamacpp"]
+    for name, key in (("llama", "server"), ("whisper", "whisper")):
+        path = shutil.which(os.path.expanduser(lc[key]))
+        print(f"{name:<9} {path or 'not found: ' + lc[key]}")
+    wm = C.expand(lc["whisper_model"])
+    print(f"stt       {wm if wm.exists() else 'missing: ' + str(wm)}")
+    print(f"runs on   {C.engine_label(cfg)} (llama.cpp / whisper.cpp)")
+    if st.get("last_tps"):
+        print(f"last      {st['last_tps']:.1f} tok/s")
+    if st.get("last_error"):
+        print(f"error     {st['last_error']}")
+    s = search.stats()
+    if s["chunks"]:
+        print(f"index     {s['files']} files · {s['chunks']} chunks · {s['db_mb']} MB")
+    return 0
+
+
 def cmd_models(args) -> int:
     out = client.call("/v1/models", timeout=30)
     cfg = C.load()
     print("aliases:")
     for a, t in cfg["models"]["aliases"].items():
         print(f"  {a:<10} → {C.resolve_model(a, cfg)}")
+    if C.backend(cfg) == "llamacpp":
+        print(f"models (llama.cpp, {C.engine_label(cfg)}):")
+        for m in out["data"]:
+            if m.get("owned_by") == "llama.cpp":
+                have = {True: f"{m.get('size_gb') or '?':>5} GB", False: "missing", None: "downloads on first use"}
+                print(f"  {m['id']:<20} {have[m.get('present')]:<22} {m.get('source', '')}")
+        print("add more under [llamacpp.models] in the config")
+        return 0
     print("installed (FastFlowLM, NPU):")
     for m in out["data"]:
         if m.get("owned_by") == "FastFlowLM":
@@ -83,7 +117,8 @@ def cmd_load(args) -> int:
         body["pmode"] = args.pmode
     t0 = time.monotonic()
     st = client.call("/npu/load", body, timeout=600)
-    print(f"loaded {st['components']} {st.get('chat_model') or ''} in {time.monotonic() - t0:.1f}s (pmode {st['pmode']})")
+    print(f"loaded {st['components']} {st.get('chat_model') or ''} in {time.monotonic() - t0:.1f}s"
+          + (f" (pmode {st['pmode']})" if st.get("pmode") else f" on {st.get('runs_on', 'GPU')}"))
     return 0
 
 
@@ -95,7 +130,7 @@ def cmd_stop(args) -> int:
             return 0  # nothing running
         print(e, file=sys.stderr)
         return 1
-    print("NPU unloaded")
+    print(f"{C.engine_label()} unloaded")
     return 0
 
 
@@ -132,7 +167,8 @@ def cmd_menu(args) -> int:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="npu", description="Everyday AI on the AMD XDNA2 NPU (FastFlowLM).")
+    p = argparse.ArgumentParser(prog="npu", description="Everyday local AI on the AMD XDNA2 NPU (FastFlowLM), "
+                                "or on a GPU with llama.cpp + whisper.cpp.")
     p.add_argument("--version", action="version", version=f"npukit {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -168,7 +204,7 @@ def main(argv=None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=lambda a: __import__("npukit.bench", fromlist=["main"]).main(a))
 
-    s = sub.add_parser("dictate", help="toggle mic recording → Whisper on the NPU → type + copy")
+    s = sub.add_parser("dictate", help="toggle mic recording → Whisper (NPU/GPU) → type + copy")
     s.add_argument("action", nargs="?", default="toggle", choices=["toggle", "start", "stop", "cancel"])
     s.set_defaults(fn=lambda a: __import__("npukit.dictate", fromlist=["main"]).main(a))
 

@@ -5,6 +5,8 @@
 Put the AMD Ryzen AI NPU to everyday use on Linux: a local LLM API, push-to-talk dictation,
 screenshot OCR and semantic search over your notes and code. All of it runs on the XDNA2 NPU through
 [FastFlowLM](https://github.com/ROCm/FastFlowLM), and the model leaves the NPU as soon as it goes idle.
+No NPU? The same tools run on a GPU (or the CPU) through llama.cpp and whisper.cpp: see
+[Without an NPU](#without-an-npu-gpu-backend).
 
 ![waybar module while dictating](docs/bar-rec.png)
 
@@ -158,6 +160,37 @@ open = ["code", "-g", "{path}:{line}"]
 - With nothing loaded the gateway sits in `epoll` with no timers; started by systemd, it exits after
   `exit_after` seconds and systemd starts it again on the next connection.
 
+## Without an NPU (GPU backend)
+
+On a machine without an XDNA2 NPU, set `backend = "llamacpp"` and the gateway drives
+[llama.cpp](https://github.com/ggml-org/llama.cpp) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+instead of FastFlowLM. Every tool (dictation, OCR, translate, describe, search, `npu ask`, the waybar module,
+the OpenAI endpoint) works the same; notifications and the bar tooltip say `GPU` instead of `NPU`.
+
+| Component | Server | Default model |
+|---|---|---|
+| Chat, vision (OCR, describe, translate) | `llama-server` on `flm_port` | Qwen3.5-9B Q4_K_M + mmproj (6.6 GB) |
+| Speech to text | `whisper-server` on `flm_port + 1` | Whisper large-v3-turbo (1.6 GB) |
+| Embeddings | `llama-server --embeddings` on `flm_port + 2` | EmbeddingGemma 300M (downloaded on first use) |
+
+Each component is its own process, so a GPU keeps them all loaded: switching the chat model restarts only that
+server and leaves Whisper warm. A model that isn't configured or whose file is missing is reported before anything
+is unloaded. Everything still unloads after `ac_idle_unload` seconds without a request, which gives the VRAM
+back (worth keeping short on a gaming PC).
+
+```sh
+sudo pacman -S llama-cpp whisper-cpp ggml-vulkan   # Arch; elsewhere build both with -DGGML_VULKAN=ON
+scripts/get-models.sh                              # Whisper + Qwen3.5-9B into ~/.local/share/npukit-engines/models
+mkdir -p ~/.config/npukit && printf '[server]\nbackend = "llamacpp"\n' >> ~/.config/npukit/config.toml
+NPUKIT_INDEX=0 ./install.sh                        # NPUKIT_INDEX=0: no background search indexing
+npu ocr --describe                                 # region → description on the clipboard
+```
+
+Models are `[llamacpp.models]` entries: `{ path = "….gguf", mmproj = "….gguf" }` for local files or
+`{ hf = "user/repo:quant" }` to let llama-server download them (vision projector included). `[llamacpp] args`
+are passed to every chat server (default `-ngl 999 -c 16384 -np 1`: all layers on the GPU, 16k context, one slot).
+See [`config.example.toml`](config.example.toml).
+
 ## Benchmarks
 
 See [docs/benchmarks.md](docs/benchmarks.md).
@@ -165,7 +198,7 @@ See [docs/benchmarks.md](docs/benchmarks.md).
 ## Development
 
 ```sh
-python -m unittest discover -s tests -v    # uses tests/fake_flm.py, no NPU needed
+python -m unittest discover -s tests -v    # fake flm / llama-server / whisper-server, no NPU or GPU needed
 ```
 
 ## License

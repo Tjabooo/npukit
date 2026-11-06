@@ -1,6 +1,7 @@
-"""`npu ocr`: select a screen region, read it with a vision model on the NPU, copy the text.
+"""`npu ocr`: select a screen region, read it with a vision model (NPU or GPU), copy the text.
 
-With `--translate [LANG]` the text is then translated by a chat model (also on the NPU)."""
+With `--translate [LANG]` the text is then translated by a chat model on the same engine;
+`--describe` / `--ask` put a description or an answer about the region on the clipboard."""
 
 from __future__ import annotations
 
@@ -197,8 +198,9 @@ def main(args) -> int:
         return 1
     if not args.file or args.copy:
         ui.copy(text)
-        title = f"→ {lang}" if lang else "OCR"
-        ui.notify(f"{title} · {took:.1f}s on NPU · copied", text[:300], timeout_ms=8000 if lang else 5000)
+        title = f"→ {lang}" if lang else ("Describe" if args.describe else "Answer" if args.ask else "OCR")
+        ui.notify(f"{title} · {took:.1f}s on {C.engine_label(cfg)} · copied", text[:300],
+                  timeout_ms=8000 if lang else 5000)
     if lang:
         print(original, file=sys.stderr)
         print("---", file=sys.stderr)

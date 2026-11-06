@@ -8,13 +8,32 @@ flm_port = 13307             # private port of the flm child process (localhost 
 flm_args = []                # extra `flm serve` arguments, e.g. ["--ctx-len", "16384"]
 max_components = 2           # XDNA2 fits a chat model + one helper (Whisper or embeddings)
 exit_after = 60              # socket-activated gateway exits after this long with nothing loaded
+backend = "flm"              # flm = FastFlowLM on the NPU; "llamacpp" = llama.cpp + whisper.cpp (GPU/CPU)
+
+# Only used with backend = "llamacpp" (machines without an XDNA2 NPU). Each component runs as its own
+# server on flm_port + 0 / 1 / 2 (chat / speech / embeddings), loaded on demand, unloaded on idle.
+[llamacpp]
+server = "llama-server"      # llama.cpp (Arch: pacman -S llama-cpp ggml-vulkan)
+whisper = "whisper-server"   # whisper.cpp (Arch: pacman -S whisper-cpp)
+label = "GPU"                # shown in notifications, the bar tooltip and `npu status`
+max_components = 3           # chat + Whisper + embeddings all stay loaded on a GPU
+args = ["-ngl", "999", "-c", "16384", "-np", "1", "--no-webui"]   # every chat llama-server
+whisper_model = "~/.local/share/npukit-engines/models/ggml-large-v3-turbo.bin"
+whisper_args = ["-l", "auto"]
+embed_model = "embed-gemma:300m"
+# With this backend and no [models.aliases] in this file: fast = vision = "qwen3.5:9b", quality = "gpt-oss:20b".
+# [llamacpp.models]          # tag = { path = "….gguf", mmproj = "….gguf" } or { hf = "user/repo:quant" }
+# "qwen3.5:9b" = { path = "~/.local/share/npukit-engines/models/Qwen3.5-9B-Q4_K_M.gguf", mmproj = "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf" }
+# "gpt-oss:20b" = { hf = "ggml-org/gpt-oss-20b-GGUF", args = ["-c", "32768"] }
 
 [models]
 default = "fast"             # used when a request names no model
-[models.aliases]             # names usable as "model" in any request
-fast = "qwen3.5:4b"          # everyday chat/coding (vision too)
-quality = "gpt-oss:20b"      # slower, better answers
-vision = "qwen3vl-it:4b"     # OCR / describing screenshots
+# Names usable as "model" in any request. Uncomment to change them; the defaults depend on the backend.
+# With backend = "llamacpp" the values must be [llamacpp.models] tags.
+# [models.aliases]
+# fast = "qwen3.5:4b"        # everyday chat/coding (vision too)      llamacpp default: qwen3.5:9b
+# quality = "gpt-oss:20b"    # slower, better answers                  llamacpp default: gpt-oss:20b
+# vision = "qwen3vl-it:4b"   # OCR / describing screenshots            llamacpp default: qwen3.5:9b
 
 [power]
 ac_online = ""               # path to the AC adapter's "online" file; empty = auto-detect

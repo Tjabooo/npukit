@@ -1,5 +1,5 @@
 [Unit]
-Description=npukit NPU gateway (owns the FastFlowLM process, unloads it when idle)
+Description=npukit gateway (owns the model servers: FastFlowLM on the NPU or llama.cpp/whisper.cpp; unloads them when idle)
 Documentation=https://github.com/Tjabooo/npukit
 Requires=npud.socket
 After=npud.socket
