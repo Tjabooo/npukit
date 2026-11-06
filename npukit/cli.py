@@ -154,7 +154,7 @@ def cmd_ask(args) -> int:
     out = client.chat([{"role": "user", "content": q}], args.model, max_tokens=args.max_tokens, **extra)
     print(out["choices"][0]["message"].get("content", "").strip())
     u = out.get("usage", {})
-    tps = u.get("decoding_speed_tps")
+    tps = u.get("decoding_speed_tps") or (out.get("timings") or {}).get("predicted_per_second")  # flm | llama.cpp
     print(f"[{time.monotonic() - t0:.1f}s · {u.get('completion_tokens', '?')} tok"
           + (f" · {tps:.1f} tok/s]" if tps else "]"), file=sys.stderr)
     return 0
@@ -163,6 +163,7 @@ def cmd_ask(args) -> int:
 def cmd_menu(args) -> int:
     items = [("Dictate (toggle)", ["dictate"]), ("Read text from region (OCR)", ["ocr"]),
              ("Translate region", ["ocr", "--pick"]),
+             ("Translate a message", ["translate"]),
              ("Describe region", ["ocr", "--describe"]), ("Search notes + code", ["search", "--rofi"]),
              ("Load fast model", ["load", "fast"]), ("Load quality model", ["load", "quality"]),
              ("Unload everything", ["stop"]), ("Update search index", ["index"])]
@@ -237,6 +238,15 @@ def main(argv=None) -> int:
     s.add_argument("--copy", action="store_true", help="copy even with --file")
     s.add_argument("-m", "--model")
     s.set_defaults(fn=lambda a: __import__("npukit.ocr", fromlist=["main"]).main(a))
+
+    s = sub.add_parser("translate", help="eww overlay: pick a language, write a message, Enter translates")
+    s.add_argument("text", nargs="*", help="translate this and print it instead of opening the overlay")
+    s.add_argument("-t", "--to", help="language for the one-shot form (names or codes: sv, de, ja, ...)")
+    s.add_argument("--close", action="store_true", help="close the overlay")
+    for flag in ("--run", "--draft", "--lang"):  # the overlay's callbacks (text on stdin)
+        s.add_argument(flag, action="store_true", help=argparse.SUPPRESS)
+    s.add_argument("--chip", type=int, help=argparse.SUPPRESS)
+    s.set_defaults(fn=lambda a: __import__("npukit.translate", fromlist=["main"]).main(a))
 
     s = sub.add_parser("index", help="update the semantic search index")
     s.add_argument("--full", action="store_true", help="re-embed everything")
