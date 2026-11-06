@@ -2,7 +2,7 @@
 # Download the default models of the llamacpp (GPU) backend into ~/.local/share/npukit-engines/models:
 # Whisper large-v3-turbo (speech to text, 1.6 GB), Qwen3.5-9B Q4_K_M + its vision projector
 # (fast/vision: OCR, describe, translate, chat; 6.6 GB) and Qwen3.6-35B-A3B UD-IQ3_XXS (quality,
-# 13.2 GB; skip it with --no-quality). Resumes partial downloads; skips files already there.
+# 13.2 GB + 0.9 GB vision projector; skip it with --no-quality). Resumes partial downloads; skips files already there.
 # NPUKIT_RATE=15M caps the download speed (curl --limit-rate), e.g. while gaming.
 # Other [llamacpp.models] entries with hf = "…" are fetched by llama-server on first use instead.
 set -euo pipefail
@@ -23,6 +23,8 @@ skip=" $* "
 [[ $skip == *" --no-whisper "* ]] || get "$hf/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" ggml-large-v3-turbo.bin
 get "$hf/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf" Qwen3.5-9B-mmproj-F16.gguf
 get "$hf/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf" Qwen3.5-9B-Q4_K_M.gguf
-[[ $skip == *" --no-quality "* ]] || get "$hf/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf" \
-    Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
+if [[ $skip != *" --no-quality "* ]]; then
+    get "$hf/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf" Qwen3.6-35B-A3B-mmproj-F16.gguf
+    get "$hf/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf" Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
+fi
 echo "models in $dir"

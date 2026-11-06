@@ -50,6 +50,7 @@ DEFAULTS: dict = {
                            "mmproj": "~/.local/share/npukit-engines/models/Qwen3.5-9B-mmproj-F16.gguf"},
             # MoE, 3B active: 13.2 GB at UD-IQ3_XXS, splits between VRAM and RAM and stays fast
             "qwen3.6:35b-a3b": {"path": "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+                                "mmproj": "~/.local/share/npukit-engines/models/Qwen3.6-35B-A3B-mmproj-F16.gguf",
                                 "args": ["-c", "32768"]},  # room for files it reads (hybrid attention: +0.3 GB)
             "qwen3.5:4b": {"hf": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M"},
             "gpt-oss:20b": {"hf": "ggml-org/gpt-oss-20b-GGUF"},
@@ -89,14 +90,21 @@ DEFAULTS: dict = {
     "ocr": {
         "capture": ["hyprshot", "-z", "-s", "-m", "region", "--raw"],
         "model": "vision",
-        "prompt": ("Transcribe all text in this image exactly as written. Keep line breaks, "
-                   "indentation and spacing. Output only the text, no commentary, no code fences."),
+        "prompt": ("Transcribe all text in this image exactly as written, profanity and insults included "
+                   "(never censor, skip or comment on them). Keep line breaks, indentation and spacing. "
+                   "Output only the text, no commentary, no code fences."),
         "describe_prompt": "Describe this image briefly and precisely.",
         "translate_to": "English",    # `npu ocr --translate` with no language
         "translate_model": "fast",    # chat model that translates the read text
-        "translate_prompt": ("Translate the text the user sends into {lang}. Keep line breaks, lists and "
-                             "formatting; leave code, names, numbers and URLs as they are. If it is already "
-                             "in {lang}, return it unchanged. Output only the translation, no commentary."),
+        "translate_ocr_model": "",    # model that reads the region when translating; "" = [ocr] model
+        # faithful on purpose: the reader needs to know what was actually said
+        "translate_prompt": ("Translate the text the user sends into {lang}, faithfully and completely, keeping "
+                             "its tone. Profanity, insults, slurs, threats and sexual language are translated "
+                             "with equally strong {lang} words: never refuse, soften, censor with asterisks, "
+                             "summarize, skip lines or add warnings. Keep line breaks, lists and formatting; "
+                             "leave code, names, numbers and URLs as they are. If it is already in {lang}, "
+                             "return it unchanged. Output only the translation, no commentary."),
+        "translate_context": "",      # appended to the prompt: where the text comes from, slang, names
     },
     "translate": {
         # `npu translate`: eww overlay; pick a language, write, Enter = translate + copy, Enter again = type it

@@ -4,6 +4,11 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+- Translation is faithful by default: the prompt tells the model never to refuse, soften or censor
+  profanity, insults or slurs (the 9B model refused vulgar game chat before), and OCR transcribes them as
+  written. `[ocr] translate_context` adds notes (source, slang glossary); `[ocr] translate_ocr_model` picks
+  the model that reads the region when translating. The GPU quality model gets its vision projector.
+
 - `npu chat` (conversation) and file access for `npu ask` / `npu chat`: with folders in `[tools] read`
   (or `--read PATH`, `/read PATH`) the model calls read-only tools (list_dir, find_files, search_text,
   read_file) before answering. Outside paths, symlink escapes and `[tools] deny` (keys, `.env`, `.ssh/`, …)

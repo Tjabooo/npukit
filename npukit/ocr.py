@@ -70,14 +70,15 @@ def language(name: str) -> str:
     return LANGS.get(name.lower(), name)
 
 
-def translate_messages(text: str, lang: str, prompt: str) -> list[dict]:
-    return [{"role": "system", "content": prompt.format(lang=lang)},
+def translate_messages(text: str, lang: str, prompt: str, context: str = "") -> list[dict]:
+    system = prompt.format(lang=lang) + (f"\n\n{context.strip()}" if context and context.strip() else "")
+    return [{"role": "system", "content": system},
             {"role": "user", "content": text}]
 
 
-def translate(text: str, lang: str, prompt: str, model: str) -> tuple[str, float]:
+def translate(text: str, lang: str, prompt: str, model: str, context: str = "") -> tuple[str, float]:
     t0 = time.monotonic()
-    out = client.chat(translate_messages(text, lang, prompt), model, max_tokens=2048, temperature=0,
+    out = client.chat(translate_messages(text, lang, prompt, context), model, max_tokens=2048, temperature=0,
                       chat_template_kwargs={"enable_thinking": False})
     return _content(out), time.monotonic() - t0
 
@@ -181,11 +182,13 @@ def main(args) -> int:
     if getattr(args, "translate", None) is not None:
         lang = language(args.translate or o["translate_to"])
     _activity("ocr")
+    reader = args.model or (lang and o.get("translate_ocr_model")) or o["model"]
     try:
-        text, took = read_image(png, prompt, args.model or o["model"])
+        text, took = read_image(png, prompt, reader)
         if text and lang:
             original = text
-            text, t2 = translate(original, lang, o["translate_prompt"], o["translate_model"])
+            text, t2 = translate(original, lang, o["translate_prompt"], o["translate_model"],
+                                 o.get("translate_context", ""))
             took += t2
             remember_language(lang)
     except client.ApiError as e:

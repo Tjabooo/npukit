@@ -229,6 +229,9 @@ db = "{t / 'index.sqlite'}"
         msgs = ocr.translate_messages("hej", "German", o["translate_prompt"])
         self.assertIn("into German", msgs[0]["content"])
         self.assertEqual(msgs[1], {"role": "user", "content": "hej"})
+        self.assertIn("never refuse, soften", msgs[0]["content"])   # faithful, uncensored by default
+        ctx = ocr.translate_messages("hej", "German", o["translate_prompt"], "Game chat: рак = trash player")
+        self.assertTrue(ctx[0]["content"].endswith("Game chat: рак = trash player"))
         png = Path(self.tmp.name) / "shot.png"
         png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
         out, err = io.StringIO(), io.StringIO()

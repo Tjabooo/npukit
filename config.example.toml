@@ -67,6 +67,9 @@ capture = ["hyprshot", "-z", "-s", "-m", "region", "--raw"]   # any command that
 model = "vision"
 translate_to = "English"     # `npu ocr --translate` without a language (names or codes: sv, de, ja, ...)
 translate_model = "fast"     # chat model that translates the text the vision model read
+translate_ocr_model = ""     # model that reads the region when translating ("" = model above); one model
+                             # for both (e.g. "quality" with a vision projector) avoids a swap per capture
+translate_context = ""       # appended to the (faithful, uncensored) translate prompt: source, slang, names
 
 [translate]
 # `npu translate` overlay (eww). Model: [ocr] translate_model unless set here.

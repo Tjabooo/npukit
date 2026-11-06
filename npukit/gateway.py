@@ -172,8 +172,9 @@ class LlamaCppEngine:
                                    f"(path = \"….gguf\" or hf = \"user/repo:quant\")")
         if not (spec.get("path") or spec.get("hf")):
             raise RuntimeError(f"[llamacpp.models] {tag!r} needs path or hf")
-        if spec.get("path") and not C.expand(spec["path"]).exists():
-            raise RuntimeError(f"model file missing for {tag}: {spec['path']}")
+        for key in ("path", "mmproj"):
+            if spec.get(key) and not C.expand(spec[key]).exists():
+                raise RuntimeError(f"model file missing for {tag}: {spec[key]}")
         return spec
 
     def check(self, need: str, model: str | None, child: "Child | None" = None) -> None:
