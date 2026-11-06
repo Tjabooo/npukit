@@ -359,6 +359,14 @@ class Gateway:
         return hw.on_ac(self.ac_path)
 
     def idle_timeout(self) -> float:
+        """Seconds without a request before unloading: the loaded chat model's own idle_unload
+        ([llamacpp.models] entry, e.g. to keep a translation model warm through a game), else by power source."""
+        c = self.child
+        chat = c.chat_model if c else None
+        if chat and self.engine.name == "llamacpp":
+            spec = self.cfg["llamacpp"].get("models", {}).get(chat)
+            if isinstance(spec, dict) and spec.get("idle_unload"):
+                return float(spec["idle_unload"])
         p = self.cfg["power"]
         return float(p["ac_idle_unload"] if self.on_ac() else p["battery_idle_unload"])
 

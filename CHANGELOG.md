@@ -4,6 +4,10 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+- `[llamacpp.models] <tag>.idle_unload`: a model can stay loaded longer (or shorter) than `[power]`, e.g. a
+  translation model kept warm through a game while a big model still leaves after 5 minutes.
+- `npu ocr --pick` starts loading the reading model while the language list is open.
+
 - Memory guard: a PSI memory-pressure trigger kills the model servers when RAM available falls under
   `[server] memory_guard_gb` (1.5 GB), and npud.service sets `OOMScoreAdjust=500`, so a model can't take
   the desktop or a game down. `hf = "…"` models are sized from the Hugging Face file list for the RAM check

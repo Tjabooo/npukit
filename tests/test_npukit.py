@@ -375,6 +375,18 @@ signal = 0
         self.assertEqual([m["role"] for m in s.messages], ["system", "user", "assistant", "tool", "assistant"])
         self.assertIn("proj", s.messages[0]["content"])
 
+    def test_46_per_model_idle_unload(self):
+        import copy
+        from npukit import gateway, config as C
+        cfg = copy.deepcopy(C.load(reload=True))
+        cfg["llamacpp"]["models"]["small"] = dict(cfg["llamacpp"]["models"]["small"], idle_unload=1800)
+        gw = gateway.Gateway(cfg)
+        base = gw.idle_timeout()
+        gw.child = gateway.Child([gateway.Proc("llama", ["chat"], "small", 1, ["x"])], None)
+        self.assertEqual(gw.idle_timeout(), 1800)          # translation model stays warm
+        gw.child = gateway.Child([gateway.Proc("llama", ["chat"], "qwen3.5:9b", 1, ["x"])], None)
+        self.assertEqual(gw.idle_timeout(), base)          # others unload as usual
+
     def test_5_bar_says_gpu_and_idle_unload(self):
         self.client.chat([{"role": "user", "content": "hi"}], "fast")
         for _ in range(50):

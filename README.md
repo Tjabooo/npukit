@@ -251,7 +251,8 @@ npu ocr --describe                                 # region → description on t
 ```
 
 Models are `[llamacpp.models]` entries: `{ path = "….gguf", mmproj = "….gguf" }` for local files or
-`{ hf = "user/repo:quant" }` to let llama-server download them (vision projector included). `[llamacpp] args`
+`{ hf = "user/repo:quant" }` to let llama-server download them (vision projector included); `idle_unload = 1800`
+in an entry keeps that model loaded longer than `[power]` says (a translation model through a game). `[llamacpp] args`
 are passed to every chat server (default `-c 16384 -np 1`: 16k context, one slot; `--fit` places the layers).
 See [`config.example.toml`](config.example.toml).
 

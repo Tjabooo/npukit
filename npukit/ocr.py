@@ -155,6 +155,18 @@ def parse_pick(code: int, out: str, rows: list[tuple[str, str]]) -> str | None:
     return language(text) if text.strip() else None  # typed, not in the list
 
 
+def _warm(model: str) -> None:
+    """Start loading `model` in the background (the gateway keeps going if this process exits)."""
+    import threading
+
+    def go():
+        try:
+            client.call("/npu/warm", {"component": "chat", "model": model}, timeout=300)
+        except client.ApiError:
+            pass
+    threading.Thread(target=go, daemon=True).start()
+
+
 def _activity(name: str | None) -> None:
     try:
         client.call("/npu/activity", {"activity": name}, timeout=5)
@@ -166,6 +178,7 @@ def main(args) -> int:
     cfg = C.load()
     o = cfg["ocr"]
     if getattr(args, "pick", False):  # choose the language first, then the region
+        _warm(args.model or o.get("translate_ocr_model") or o["model"])  # loads while you pick
         chosen = pick_language(cfg)
         if not chosen:
             return 1
