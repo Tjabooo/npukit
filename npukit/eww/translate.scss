@@ -1,0 +1,68 @@
+// npukit translate overlay. The palette ($bg … $error), $font and $width are prepended by
+// npukit/translate.py from [translate] in the config.
+// No letter-spacing on labels: GTK measures them without it and cuts the last letter off.
+
+* {
+  all: unset;
+  font-family: $font;
+}
+
+.deck {
+  min-width: $width;
+  background-color: rgba($bg, 0.96);
+  border: 1px solid $line;
+  border-top: 3px solid $accent;
+  padding: 14px 16px;
+  color: $fg;
+}
+
+.head    { margin-bottom: 12px; }
+.brand   { font-size: 13px; font-weight: 800; color: $accent; }
+.arrow   { font-size: 13px; color: $dim; margin: 0 8px; }
+.target  { font-size: 13px; font-weight: 800; color: $accent2; }
+.engine  { font-size: 10px; color: $dim; margin-right: 14px; }
+.close   { font-size: 10px; color: $dim; }
+.close:hover { color: $accent2; }
+
+.field {
+  background-color: $panel;
+  border: 1px solid $line;
+  border-left: 3px solid $accent;
+  padding: 10px 12px;
+}
+.message { font-size: 15px; color: $fg; caret-color: $accent2; min-height: 22px; }
+.message selection, .lang-input selection { background-color: $accent; color: $bg; }
+
+.langs   { margin-top: 10px; }
+.label   { font-size: 10px; color: $dim; margin-right: 4px; }
+.chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  color: $fg;
+  background-color: $panel;
+  border: 1px solid $line;
+}
+.chip-hit:hover .chip { color: $accent2; border-color: $accent2; }
+.chip.on { color: $bg; background-color: $accent; border-color: $accent; }
+
+.other {
+  background-color: $panel;
+  border: 1px solid $line;
+  padding: 3px 8px;
+}
+.lang-input { font-size: 11px; color: $fg; caret-color: $accent2; }
+
+.result-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background-color: $panel;
+  border-left: 3px solid $accent2;
+}
+.result-box.busy  { border-left-color: $dim; }
+.result-box.error { border-left-color: $error; }
+.result  { font-size: 15px; color: $fg; margin-bottom: 6px; }
+.status  { font-size: 10px; color: $dim; }
+.error .status { color: $error; }
+
+.hint    { font-size: 10px; color: $dim; margin-top: 10px; }

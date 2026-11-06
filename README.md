@@ -22,6 +22,11 @@ No NPU? The same tools run on a GPU (or the CPU) through llama.cpp and whisper.c
   `--translate [LANG]` also translates it (default English) with the chat model, still on the NPU;
   `--pick` first opens a searchable language list (recent ones on top, any unlisted language can be typed).
   `--describe` or `--ask "…"` asks about the image instead.
+- **Translate a message** (`npu translate`): an eww overlay. Pick a language (recent ones first, or type any
+  language), write the message, press Enter: the translation shows up and is copied. Enter again on the same
+  text closes the overlay and types the translation into the window you were in, so you can write in your
+  language and send in theirs. It runs its own eww instance with colours from `[translate.colors]`, so an
+  existing eww setup is left alone. `npu translate -t sv "text"` prints a translation without the overlay.
 - **Semantic search** (`npu index`, `npu search`): EmbeddingGemma on the NPU, an incremental SQLite index
   (git repos index tracked and untracked-but-not-ignored files), a systemd timer to keep it fresh,
   and a terminal or rofi front end that opens hits in your editor at the right line.
@@ -55,7 +60,8 @@ FastFlowLM with the two most recently used.
   `fastflowlm_<ver>_linux.tar.gz` anywhere and set `[server] flm = "/path/to/flm"`.
 - Python 3.11+. numpy is optional (faster search); install it from your distro (`python-numpy`).
 - Desktop tools: `pw-record` (PipeWire), `wl-clipboard`, `notify-send`, `rofi`, a region screenshotter that can
-  print a PNG (`hyprshot --raw`, or `grim -g "$(slurp)" -`), and optionally `wtype` for typing dictated text.
+  print a PNG (`hyprshot --raw`, or `grim -g "$(slurp)" -`), optionally `wtype` for typing dictated and translated
+  text, and [eww](https://github.com/elkowar/eww) 0.6+ for the `npu translate` overlay.
 
 ## Install
 
@@ -82,6 +88,8 @@ npu transcribe file.wav    speech to text for a file
 npu ocr [--describe]       screen region → text on the clipboard
 npu ocr --translate [sv]   screen region → text translated (default English) on the clipboard
 npu ocr --pick             choose the language in a searchable rofi list, then the region
+npu translate              overlay: pick a language, write, Enter translates + copies, Enter again types it
+npu translate -t de "hi"   translate and print, no overlay
 npu index [--full]         update the search index
 npu search "query"         semantic search (--rofi for the picker)
 npu menu                   rofi menu with all of the above
@@ -98,9 +106,31 @@ FastFlowLM tag (Lemonade-style names like `qwen3.5-4b-FLM` work too).
 local npu = os.getenv("HOME") .. "/.local/bin/npu "
 hl.bind("SUPER + SHIFT + Print", hl.dsp.exec_cmd(npu .. "ocr"))           -- region → text
 hl.bind("SUPER + CTRL + Print",  hl.dsp.exec_cmd(npu .. "ocr --pick"))      -- pick language, region → translated text
+hl.bind("SUPER + CTRL + T",      hl.dsp.exec_cmd(npu .. "translate"))     -- translate a message (overlay)
 hl.bind("SUPER + ALT + D",       hl.dsp.exec_cmd(npu .. "dictate"))       -- dictate toggle
 hl.bind("SUPER + ALT + S",       hl.dsp.exec_cmd(npu .. "search --rofi")) -- semantic search
+
+-- Esc closes the translate overlay: npukit enters this submap when the overlay opens and leaves it when it
+-- closes (config below). Only Esc and the toggle are bound in it, so typing reaches the overlay as usual.
+local function npu_translate_close()
+    hl.exec_cmd(npu .. "translate --close")
+    hl.dispatch(hl.dsp.submap("reset"))
+end
+hl.define_submap("npu-translate", function()
+    hl.bind("Escape", npu_translate_close)
+    hl.bind("SUPER + CTRL + T", npu_translate_close)
+end)
 ```
+
+```toml
+[translate]
+on_open = ["hyprctl", "dispatch", 'hl.dsp.submap("npu-translate")']
+on_close = ["hyprctl", "dispatch", 'hl.dsp.submap("reset")']
+# hyprland.conf instead of hyprland.lua: ["hyprctl", "dispatch", "submap", "npu-translate"] / "reset"
+```
+
+eww gives no way to catch Esc itself, hence the submap; without it the overlay closes with its ✕, the
+toggle bind, or after Enter-again types the translation.
 
 ### Waybar
 

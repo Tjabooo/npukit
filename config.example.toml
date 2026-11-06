@@ -68,6 +68,17 @@ model = "vision"
 translate_to = "English"     # `npu ocr --translate` without a language (names or codes: sv, de, ja, ...)
 translate_model = "fast"     # chat model that translates the text the vision model read
 
+[translate]
+# `npu translate` overlay (eww). Model: [ocr] translate_model unless set here.
+# model = "quality"
+languages = ["English", "Swedish", "German", "French", "Spanish", "Japanese"]  # chips after recent ones
+type = ["wtype", "-"]        # Enter again types the translation into the window underneath; [] = only copy
+on_open = []                 # e.g. enter a Hyprland submap so Esc closes it (README → Hyprland)
+on_close = []
+# font = "JetBrainsMono Nerd Font"
+# [translate.colors]         # bg panel line fg dim accent accent2 error
+# accent = "#7aa2f7"
+
 [ui]
 menu_theme = ""              # rofi -theme for `npu menu`, e.g. "~/.config/rofi/npu.rasi"
 menu_close_wait = 0.45       # seconds the menu gets to fade out before a region selection freezes the screen

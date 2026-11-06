@@ -100,7 +100,13 @@ DEFAULTS: dict = {
     "translate": {
         # `npu translate`: eww overlay; pick a language, write, Enter = translate + copy, Enter again = type it
         "to": "",                     # language before anything is picked (empty = [ocr] translate_to)
-        "model": "",                  # chat model (empty = [ocr] translate_model); the prompt is [ocr] translate_prompt
+        "model": "",                  # chat model (empty = [ocr] translate_model)
+        # {lang} = the picked language. Small models misread "return it unchanged if it is already {lang}"
+        # (Swedish came back as is for English), so this prompt has no such clause.
+        "prompt": ("Translate the user's message into {lang}, as a native speaker would write it. It is a chat "
+                   "message: keep its meaning, tone, line breaks and any emoji it has; leave names, code and URLs "
+                   "as they are. Add nothing that is not in the message (no emoji, notes or quotes). "
+                   "Output only the {lang} translation, nothing else."),
         "languages": ["English", "Swedish", "German", "French", "Spanish", "Japanese"],  # chips after recent ones
         "copy": True,                 # put each translation on the clipboard
         "type": ["wtype", "-"],       # Enter again types it into the window underneath; [] = only copy
@@ -109,7 +115,7 @@ DEFAULTS: dict = {
         "on_open": [],                # command run after the overlay opens, e.g. enter a compositor submap
         "on_close": [],               # and after it closes (see README → Hyprland for Esc)
         "font": "JetBrainsMono Nerd Font",
-        "width": 720,
+        "width": 760,
         "colors": {"bg": "#101216", "panel": "#181b21", "line": "#2a2f3a", "fg": "#dfe3ea", "dim": "#6b7280",
                    "accent": "#7aa2f7", "accent2": "#f5a97f", "error": "#ed6a5e"},
     },

@@ -4,6 +4,12 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+- `npu translate`: an eww overlay to translate a message you write. Language chips (recent first, any
+  language can be typed), Enter translates and copies, Enter again types the translation into the window
+  underneath (wtype). Own eww instance, colours from `[translate.colors]`, optional `on_open`/`on_close`
+  hooks (a Hyprland submap for Esc). Its own message prompt (`[translate] prompt`): the OCR prompt's
+  "return it unchanged if already in {lang}" made small models skip Swedish → English. Also in `npu menu`;
+  `npu translate -t LANG "text"` prints without the overlay.
 - GPU backend: `[server] backend = "llamacpp"` runs the same tools (dictation, OCR, translate, describe,
   search, the OpenAI endpoint, the waybar module) on llama.cpp + whisper.cpp for machines without an NPU.
   One server per component, so swapping the chat model keeps Whisper loaded; unknown or missing models

@@ -429,5 +429,83 @@ class LanguagePickTests(unittest.TestCase):
         self.assertIsNone(ocr.parse_pick(0, "-1\t \n", rows))
 
 
+class TranslateOverlayTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = {k: os.environ.get(k) for k in ("XDG_STATE_HOME", "XDG_RUNTIME_DIR")}
+        os.environ["XDG_STATE_HOME"] = self.tmp.name + "/state"
+        os.environ["XDG_RUNTIME_DIR"] = self.tmp.name + "/run"
+
+    def tearDown(self):
+        for k, v in self.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def cfg(self):
+        from npukit import config as C
+        cfg = C.load()
+        cfg["translate"].update(copy=False, type=[], eww="true")
+        return cfg
+
+    def test_chips_current_then_recent_then_configured(self):
+        from npukit import translate as T
+        self.assertEqual(T.chips(["sv", "German"], ["English", "swedish", "French"], "de"),
+                         ["German", "Swedish", "English", "French"])
+        self.assertEqual(len(T.chips([], [f"L{i}" for i in range(20)], "")), T.MAX_CHIPS)
+
+    def test_hostile_text_reaches_stdin_verbatim(self):
+        """eww pastes the input's value into the command unescaped; the here-document keeps it inert."""
+        from npukit import translate as T
+        out = Path(self.tmp.name) / "got"
+        nasty = "it's \"$(touch PWNED)\" `touch PWNED` $HOME; rm -rf / & {0} \\n"
+        for action in (T.heredoc_action("tee", str(out)), T.draft_action(out)):
+            out.unlink(missing_ok=True)
+            subprocess.run(["/bin/sh", "-c", action.replace("{}", nasty)], cwd=self.tmp.name, check=True)
+            for _ in range(50):
+                if out.exists() and out.read_text():
+                    break
+                time.sleep(0.02)
+            self.assertEqual(out.read_text(), nasty + "\n")
+            self.assertFalse((Path(self.tmp.name) / "PWNED").exists())
+
+    def test_render_has_no_placeholders_and_uses_palette(self):
+        from npukit import translate as T
+        cfg = self.cfg()
+        cfg["translate"]["colors"]["accent"] = "#123456"
+        self.assertNotRegex(T.render_yuck(cfg), r"@[A-Z_]+@")
+        self.assertIn("$accent: #123456;", T.render_scss(cfg))
+
+    def test_enter_translates_then_enter_again_sends(self):
+        from npukit import translate as T
+        cfg = self.cfg()
+        typed = Path(self.tmp.name) / "typed"
+        cfg["translate"].update(type=["sh", "-c", f"cat > {typed}"], type_delay=0)
+        calls = []
+
+        def fake_translate(text, lang, prompt, model):
+            calls.append((text, lang))
+            return f"[{lang}] {text}", 0.1
+        orig = (T.ocr.translate, T.push, T._eww, T._hook)
+        T.ocr.translate, T.push = fake_translate, lambda cfg, st: None
+        T._eww, T._hook = (lambda cfg, *a, **k: (0, "")), (lambda cfg, key: None)
+        try:
+            T.save_state(T.fresh_state(cfg, {}) | {"lang": "German"})
+            self.assertEqual(T.run(cfg, "hej"), 0)
+            self.assertEqual(T.load_state()["result"], "[German] hej")
+            T.run(cfg, "hej", "French")          # chip: same text, new language → translate again
+            T.run(cfg, "hej", "French")          # same chip again: nothing new
+            self.assertEqual(calls, [("hej", "German"), ("hej", "French")])
+            self.assertIn("French", T.load_state()["chips"])
+            T.run(cfg, "hej")                    # Enter again on the same text → type it, close
+            self.assertEqual(typed.read_text(), "[French] hej")
+            self.assertFalse(T.load_state()["open"])
+            self.assertEqual(len(calls), 2)
+        finally:
+            T.ocr.translate, T.push, T._eww, T._hook = orig
+
+
 if __name__ == "__main__":
     unittest.main()
