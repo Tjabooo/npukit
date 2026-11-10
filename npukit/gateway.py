@@ -1,4 +1,5 @@
-"""npud: OpenAI-compatible gateway that owns the one FastFlowLM process on the NPU.
+"""npud: OpenAI-compatible gateway that owns the model servers (FastFlowLM on the NPU, or
+llama.cpp + whisper.cpp on a GPU).
 
 Why a gateway: an XDNA2 NPU only has room for one chat model plus one helper (Whisper or the
 embedding model), and a second flm process can't get an NPU context while a chat model is loaded.
@@ -6,6 +7,10 @@ So exactly one `flm serve` runs, started on demand with the components the last 
 needed, stopped after an idle timeout (shorter on battery), and restarted when a request needs
 something it doesn't have. Idle cost is zero: with nothing loaded the gateway blocks in epoll,
 and when started by systemd socket activation it exits after a minute without a model.
+
+On machines without an NPU (`[server] backend = "llamacpp"`) the same gateway runs one
+llama-server per chat/embedding model and a whisper-server for speech, each on its own private
+port, loaded on demand and unloaded on idle the same way, so the tools work unchanged.
 """
 
 from __future__ import annotations
@@ -16,15 +21,20 @@ import json
 import os
 import re
 import signal
+import select
 import socket
 import sys
+import threading
 import time
+import urllib.parse
+import urllib.request
 
 from . import config as C
 from . import hw
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-TPS = re.compile(rb'"decoding_speed_tps"\s*:\s*([0-9.]+)')
+TPS = re.compile(rb'"(?:decoding_speed_tps|predicted_per_second)"\s*:\s*([0-9.]+)')  # flm | llama.cpp
+LLAMA_ERR = re.compile(r"^(error|E |ERROR)|\b(error|failed to|unable to)\b.*(load|open|model|alloc)", re.I)
 ROUTES = {
     "/v1/chat/completions": "chat",
     "/v1/completions": "chat",
@@ -41,29 +51,290 @@ def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
-class Child:
-    def __init__(self, components: list[str], chat_model: str | None, pmode: str, port: int):
+class Proc:
+    """One model server process: the flm child, or one llama-server / whisper-server."""
+
+    def __init__(self, kind: str, components: list[str], chat_model: str | None, port: int,
+                 argv: list[str], probe: str = "/v1/models"):
+        self.kind = kind              # flm | llama | whisper
         self.components = components
         self.chat_model = chat_model
-        self.pmode = pmode
         self.port = port
+        self.argv = argv
+        self.probe = probe            # GET path that answers 200 once the model is loaded
+        self.timeout: float | None = None  # load timeout; None = [server] start_timeout
+        self.note = ""                # e.g. "CPU" when Whisper had to leave the GPU to the reserve
         self.proc: asyncio.subprocess.Process | None = None
         self.lines: collections.deque[str] = collections.deque(maxlen=60)
         self.failed = ""
-        self.started = time.time()
 
-    def has(self, need: str, model: str | None) -> bool:
-        if need not in self.components:
-            return False
-        return need != "chat" or self.chat_model == model
+    def same(self, other: "Proc") -> bool:
+        return self.argv == other.argv and self.port == other.port
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.returncode is None
 
 
+class Child:
+    """Everything that is loaded: one flm process (all components), or a server per component."""
+
+    def __init__(self, procs: list[Proc], pmode: str | None):
+        self.procs = procs
+        self.pmode = pmode
+        self.started = time.time()
+
+    @property
+    def components(self) -> list[str]:
+        return [x for p in self.procs for x in p.components]
+
+    @property
+    def chat_model(self) -> str | None:
+        p = self.proc_for("chat")
+        return p.chat_model if p else None
+
+    @property
+    def port(self) -> int:
+        p = self.proc_for("chat") or self.procs[0]
+        return p.port
+
+    @property
+    def proc(self):
+        return self.procs[0].proc if self.procs else None
+
+    def proc_for(self, need: str) -> Proc | None:
+        return next((p for p in self.procs if need in p.components), None)
+
+    def has(self, need: str, model: str | None) -> bool:
+        p = self.proc_for(need)
+        if not p or not p.alive():
+            return False
+        return need != "chat" or p.chat_model == model
+
+    def alive(self) -> bool:
+        return bool(self.procs) and all(p.alive() for p in self.procs)
+
+
+class FlmEngine:
+    """FastFlowLM: one process on the NPU serves the chat model and the helpers together."""
+    name, incremental, uses_pmode = "flm", False, True
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.max_components = int(cfg["server"]["max_components"])
+
+    def check(self, need: str, model: str | None, child: "Child | None" = None) -> None:
+        pass  # flm reports unknown tags itself
+
+    def plan(self, wanted: list[str], chat_model: str | None, pmode: str) -> list[Proc]:
+        s = self.cfg["server"]
+        args = [os.path.expanduser(s["flm"]), "serve"]
+        if "chat" in wanted:
+            args.append(chat_model)
+        if "asr" in wanted:
+            args += ["--asr", "1"]
+        if "embed" in wanted:
+            args += ["--embed", "1"]
+        # --quiet: flm otherwise logs every request body; load errors are still printed
+        args += ["--port", str(s["flm_port"]), "--host", "127.0.0.1", "--pmode", pmode, "--quiet"]
+        args += [str(a) for a in s["flm_args"]]
+        return [Proc("flm", list(wanted), chat_model if "chat" in wanted else None, int(s["flm_port"]), args)]
+
+    async def installed(self) -> list[dict]:
+        p = await asyncio.create_subprocess_exec(
+            os.path.expanduser(self.cfg["server"]["flm"]), "list", "--json", "--filter", "installed", "--quiet",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(p.communicate(), 20)
+        data = json.loads(out)
+        return [{"id": m["name"], "object": "model", "owned_by": "FastFlowLM",
+                 "labels": m.get("label", []), "size_gb": m.get("footprint")}
+                for m in (data.get("models", data) if isinstance(data, dict) else data)]
+
+
+class LlamaCppEngine:
+    """llama.cpp + whisper.cpp: a server per component (GPU or CPU), so a GPU can hold the chat
+    model, Whisper and the embedding model at once and swapping one leaves the others loaded."""
+    name, incremental, uses_pmode = "llamacpp", True, False
+    OFFSET = {"chat": 0, "asr": 1, "embed": 2}
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.lc = cfg["llamacpp"]
+        self.max_components = int(self.lc.get("max_components", 3))
+
+    def spec(self, tag: str) -> dict:
+        """[llamacpp.models] entry for a tag; a bare .gguf path or a user/repo[:quant] works too."""
+        spec = self.lc.get("models", {}).get(tag)
+        if isinstance(spec, str):
+            spec = {"path": spec} if spec.endswith(".gguf") else {"hf": spec}
+        if spec is None:
+            if tag.endswith(".gguf"):
+                spec = {"path": tag}
+            elif "/" in tag:
+                spec = {"hf": tag}
+            else:
+                raise RuntimeError(f"unknown model {tag!r}: add it under [llamacpp.models] "
+                                   f"(path = \"….gguf\" or hf = \"user/repo:quant\")")
+        if not (spec.get("path") or spec.get("hf")):
+            raise RuntimeError(f"[llamacpp.models] {tag!r} needs path or hf")
+        for key in ("path", "mmproj"):
+            if spec.get(key) and not C.expand(spec[key]).exists():
+                raise RuntimeError(f"model file missing for {tag}: {spec[key]}")
+        return spec
+
+    def check(self, need: str, model: str | None, child: "Child | None" = None) -> None:
+        if need == "chat":
+            self.fits(model or "", self.spec(model or ""), child)
+        elif need == "embed":
+            self.spec(self.lc["embed_model"])
+        elif need == "asr" and not C.expand(self.lc["whisper_model"]).exists():
+            raise RuntimeError(f"Whisper model missing: {self.lc['whisper_model']} "
+                               "(scripts/get-models.sh downloads it)")
+
+    # -- headroom: keep [llamacpp] vram_reserve of the GPU and ram_reserve_gb of RAM for other apps
+    def vram_reserve(self, vram: dict | None) -> int:
+        """Bytes of VRAM to leave free, from [llamacpp] vram_reserve (a fraction of the card)."""
+        frac = float(self.lc.get("vram_reserve", 0) or 0)
+        return int(vram["total"] * frac) if vram and frac > 0 else 0
+
+    def footprint(self, spec: dict) -> int | None:
+        """Bytes a chat server needs (model + projector files + [llamacpp] overhead_gb); None if unknown.
+        hf = "user/repo[:quant]" models are sized from the Hugging Face file list before they download."""
+        extra = int(float(self.lc.get("overhead_gb", 1.0)) * 1e9)
+        if spec.get("size_gb"):
+            return int(float(spec["size_gb"]) * 1e9)
+        if not spec.get("path"):
+            size = hf_size(spec.get("hf", ""))
+            return size + extra if size else None
+        files = [C.expand(f) for f in (spec.get("path"), spec.get("mmproj")) if f]
+        return sum(f.stat().st_size for f in files) + extra
+
+    def fits(self, tag: str, spec: dict, child: "Child | None") -> None:
+        """Refuse a model whose share outside the GPU (whatever doesn't fit above the VRAM reserve)
+        would leave less than ram_reserve_gb of RAM available. The chat server it replaces counts as freed."""
+        keep = float(self.lc.get("ram_reserve_gb", 0) or 0) * 1e9
+        need, avail = self.footprint(spec), hw.mem_available()
+        if not keep or need is None or avail is None:
+            return
+        vram = hw.gpu_vram()
+        old = child.proc_for("chat") if child else None
+        freed_vram = 0
+        if old and old.alive() and old.proc:
+            freed_vram = hw.proc_vram(old.proc.pid)
+            avail += hw.proc_rss_anon(old.proc.pid)
+        room = max(0, vram["total"] - vram["used"] + freed_vram - self.vram_reserve(vram)) if vram else 0
+        in_ram = max(0, need - room)
+        if avail - in_ram < keep:
+            gb = 1e9
+            raise RuntimeError(
+                f"not enough memory for {tag} right now: ~{in_ram / gb:.1f} GB would go to RAM "
+                f"(GPU room {room / gb:.1f} GB after keeping {self.vram_reserve(vram) / gb:.1f} GB free), "
+                f"{avail / gb:.1f} GB available, keeping {keep / gb:.0f} GB free. Close something or use a smaller model")
+
+    def _fit_args(self) -> list[str]:
+        """--fit-target = the VRAM reserve: llama.cpp puts what doesn't fit above it in RAM (MoE experts first)."""
+        reserve = self.vram_reserve(hw.gpu_vram())
+        args = ["--fit", "on", "--fit-target", str(reserve // 1048576)] if reserve else []
+        threads = int(self.lc.get("threads", 0) or 0)
+        return args + (["-t", str(threads)] if threads else [])
+
+    def _whisper_on_gpu(self) -> bool:
+        vram = hw.gpu_vram()
+        if not vram:
+            return True
+        need = C.expand(self.lc["whisper_model"]).stat().st_size + 400 * 1048576  # + work buffers
+        return vram["total"] - vram["used"] - need >= self.vram_reserve(vram)
+
+    def _model_args(self, spec: dict) -> list[str]:
+        if spec.get("path"):
+            args = ["-m", str(C.expand(spec["path"]))]
+            if spec.get("mmproj"):
+                args += ["--mmproj", str(C.expand(spec["mmproj"]))]
+            return args
+        return ["-hf", spec["hf"]]
+
+    def plan(self, wanted: list[str], chat_model: str | None, pmode: str | None) -> list[Proc]:
+        base = int(self.cfg["server"]["flm_port"])
+        procs = []
+        for comp in wanted:
+            port = base + self.OFFSET[comp]
+            if comp == "asr":
+                argv = [os.path.expanduser(self.lc["whisper"]), "-m", str(C.expand(self.lc["whisper_model"])),
+                        "--host", "127.0.0.1", "--port", str(port),
+                        "--inference-path", "/v1/audio/transcriptions", *map(str, self.lc["whisper_args"])]
+                gpu = self._whisper_on_gpu()
+                if not gpu:  # the GPU is at its reserve: transcribe on the CPU instead of eating into it
+                    argv.append("-ng")
+                    if int(self.lc.get("threads", 0) or 0):
+                        argv += ["-t", str(int(self.lc["threads"]))]
+                p = Proc("whisper", ["asr"], None, port, argv, "/health")
+                p.note = "" if gpu else "CPU"
+                procs.append(p)
+                continue
+            tag = chat_model if comp == "chat" else self.lc["embed_model"]
+            spec = self.spec(tag or "")
+            extra = self.lc["args"] if comp == "chat" else self.lc["embed_args"]
+            argv = [os.path.expanduser(self.lc["server"]), *self._model_args(spec),
+                    "--host", "127.0.0.1", "--port", str(port), "--alias", tag, *self._fit_args(),
+                    *map(str, extra), *map(str, spec.get("args", []))]
+            p = Proc("llama", [comp], tag if comp == "chat" else None, port, argv, "/health")
+            if spec.get("hf") and not spec.get("path"):  # the first start downloads the model
+                p.timeout = float(self.lc.get("download_timeout", 3600))
+            procs.append(p)
+        return procs
+
+    async def installed(self) -> list[dict]:
+        out = []
+        for tag, spec in self.lc.get("models", {}).items():
+            spec = {"path": spec} if isinstance(spec, str) and spec.endswith(".gguf") else \
+                ({"hf": spec} if isinstance(spec, str) else spec)
+            path = C.expand(spec["path"]) if spec.get("path") else None
+            out.append({"id": tag, "object": "model", "owned_by": "llama.cpp",
+                        "source": str(path) if path else "hf:" + str(spec.get("hf")),
+                        "present": bool(path and path.exists()) if path else None,
+                        "size_gb": round(path.stat().st_size / 1e9, 1) if path and path.exists() else None})
+        return out
+
+
+_HF_SIZES: dict[str, int | None] = {}
+
+
+def hf_size(ref: str, fetch=None) -> int | None:
+    """Download size of what llama-server -hf REF fetches: the GGUF files matching the quant (all parts of a
+    split model; Q4_K_M when no quant is given, like llama.cpp) plus a vision projector if the repo has one."""
+    if ref in _HF_SIZES:
+        return _HF_SIZES[ref]
+    repo, _, quant = ref.partition(":")
+    quant = (quant or "Q4_K_M").lower()
+    size = None
+    try:
+        if fetch is None:
+            url = f"https://huggingface.co/api/models/{urllib.parse.quote(repo)}/tree/main?recursive=true"
+            with urllib.request.urlopen(url, timeout=8) as r:
+                tree = json.load(r)
+        else:
+            tree = fetch(repo)
+        ggufs = [(x["path"].rsplit("/", 1)[-1], int(x.get("size") or 0)) for x in tree
+                 if str(x.get("path", "")).endswith(".gguf")]
+        models = [(n, s) for n, s in ggufs if not n.lower().startswith("mmproj")]
+        picked = [s for n, s in models if quant in n.lower()]
+        if not picked and models and ":" not in ref:
+            picked = [min(s for _, s in models)]  # no Q4_K_M: llama.cpp takes the first; assume the smallest
+        proj = sorted(s for n, s in ggufs if n.lower().startswith("mmproj"))
+        size = (sum(picked) + (proj[0] if proj else 0)) if picked else None
+    except (OSError, ValueError, KeyError, TypeError):
+        size = None
+    _HF_SIZES[ref] = size
+    return size
+
+
+def make_engine(cfg: dict):
+    return LlamaCppEngine(cfg) if C.backend(cfg) == "llamacpp" else FlmEngine(cfg)
+
+
 class Gateway:
     def __init__(self, cfg: dict):
         self.cfg = cfg
+        self.engine = make_engine(cfg)
         self.child: Child | None = None
         self.state = "off"           # off | loading | ready | error
         self.activity: str | None = None
@@ -88,6 +359,14 @@ class Gateway:
         return hw.on_ac(self.ac_path)
 
     def idle_timeout(self) -> float:
+        """Seconds without a request before unloading: the loaded chat model's own idle_unload
+        ([llamacpp.models] entry, e.g. to keep a translation model warm through a game), else by power source."""
+        c = self.child
+        chat = c.chat_model if c else None
+        if chat and self.engine.name == "llamacpp":
+            spec = self.cfg["llamacpp"].get("models", {}).get(chat)
+            if isinstance(spec, dict) and spec.get("idle_unload"):
+                return float(spec["idle_unload"])
         p = self.cfg["power"]
         return float(p["ac_idle_unload"] if self.on_ac() else p["battery_idle_unload"])
 
@@ -95,13 +374,13 @@ class Gateway:
         p = self.cfg["power"]
         return p["ac_pmode"] if self.on_ac() else p["battery_pmode"]
 
-    # ---------------------------------------------------------------- flm process
-    async def _pump(self, child: Child):
-        """Read flm's (very chatty) stdout: keep a short tail, log errors, never block it."""
+    # ---------------------------------------------------------------- model server processes
+    async def _pump(self, p: Proc):
+        """Read a server's (often chatty) output: keep a short tail, log errors, never block it."""
         buf = b""
-        assert child.proc and child.proc.stdout
+        assert p.proc and p.proc.stdout
         while True:
-            chunk = await child.proc.stdout.read(65536)
+            chunk = await p.proc.stdout.read(65536)
             if not chunk:
                 break
             buf += chunk
@@ -110,64 +389,99 @@ class Gateway:
                 buf = b""
             for raw in lines:
                 line = ANSI.sub("", raw[:400].decode("utf-8", "replace")).strip()
-                if not line.startswith(("[FLM]", "[ERROR]", "[Error]", "[Warning]")):
-                    continue  # flm echoes request content even with --quiet: never parse that
-                child.lines.append(line)
-                if line.startswith(("[ERROR]", "[Error]")):
-                    log("flm:", line)
-                    if "Failed to load" in line or "HWCTX" in line:
-                        child.failed = line
+                if p.kind == "flm":
+                    if not line.startswith(("[FLM]", "[ERROR]", "[Error]", "[Warning]")):
+                        continue  # flm echoes request content even with --quiet: never parse that
+                    p.lines.append(line)
+                    if line.startswith(("[ERROR]", "[Error]")):
+                        log("flm:", line)
+                        if "Failed to load" in line or "HWCTX" in line:
+                            p.failed = line
+                    continue
+                # llama.cpp / whisper.cpp: transcripts start with "[" (timestamps): keep them out of
+                # the tail and the journal; errors look like "error: …", "E …" or "…: failed to …"
+                if not line or line.startswith("["):
+                    continue
+                p.lines.append(line)
+                if LLAMA_ERR.search(line):
+                    log(f"{p.kind}:", line)
 
-    async def _start(self, components: list[str], chat_model: str | None, pmode: str) -> bool:
+    async def _spawn(self, p: Proc) -> bool:
         s = self.cfg["server"]
-        args = [os.path.expanduser(s["flm"]), "serve"]
-        if "chat" in components:
-            args.append(chat_model)
-        if "asr" in components:
-            args += ["--asr", "1"]
-        if "embed" in components:
-            args += ["--embed", "1"]
-        # --quiet: flm otherwise logs every request body; load errors are still printed
-        args += ["--port", str(s["flm_port"]), "--host", "127.0.0.1", "--pmode", pmode, "--quiet"]
-        args += [str(a) for a in s["flm_args"]]
-        child = Child(components, chat_model, pmode, int(s["flm_port"]))
-        self.child = child
-        self.state = "loading"
-        self.publish()
-        log("start:", " ".join(args))
+        log("start:", " ".join(p.argv))
         t0 = time.monotonic()
-        child.proc = await asyncio.create_subprocess_exec(
-            *args, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, start_new_session=True)
-        asyncio.get_running_loop().create_task(self._pump(child))
-        deadline = t0 + float(s["start_timeout"])
+        try:
+            p.proc = await asyncio.create_subprocess_exec(
+                *p.argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+        except FileNotFoundError:
+            hint = {"flm": "install FastFlowLM", "llama": "install llama.cpp (Arch: llama-cpp ggml-vulkan)",
+                     "whisper": "install whisper.cpp (Arch: whisper-cpp)"}[p.kind]
+            p.failed = f"{os.path.basename(p.argv[0])} not found: {hint}"
+            return False
+        except OSError as e:
+            p.failed = f"{p.argv[0]}: {e.strerror or e}"
+            return False
+        asyncio.get_running_loop().create_task(self._pump(p))
+        deadline = t0 + float(p.timeout or s["start_timeout"])
         while time.monotonic() < deadline:  # polls only while a model is loading
-            if not child.alive():
+            if not p.alive():
                 break
-            if await self._probe(child.port):
+            if await self._probe(p.port, p.probe):
                 break
             await asyncio.sleep(0.15)
         await asyncio.sleep(0.05)  # let the pump catch a load error printed just before listen
-        if not child.alive() or child.failed or time.monotonic() >= deadline:
-            self.last_error = child.failed or (child.lines[-1] if child.lines else "flm did not start")
-            log("start failed:", self.last_error)
-            await self._stop()
-            self.state = "error"
-            self.publish()
+        if not p.alive() or p.failed or time.monotonic() >= deadline:
+            p.failed = p.failed or (p.lines[-1] if p.lines else f"{p.kind} did not start")
+            log("start failed:", p.failed)
+            await self._kill(p)
             return False
-        self.loaded_at = time.time()
-        self.state = "ready"
-        log(f"ready in {time.monotonic() - t0:.1f}s: {components} {chat_model or ''} pmode={pmode}")
-        self.publish()
+        log(f"ready in {time.monotonic() - t0:.1f}s: {p.components} {p.chat_model or ''}")
         return True
 
-    async def _probe(self, port: int) -> bool:
+    async def _load(self, wanted: list[str], chat_model: str | None, pmode: str | None) -> list[str]:
+        """Make `wanted` loaded: flm restarts its one process; llama.cpp starts the servers that are
+        missing or must change and leaves the rest running. Returns the components that failed."""
+        plan = self.engine.plan(wanted, chat_model, pmode)
+        old = self.child.procs if self.child else []
+        keep = [p for p in old if p.alive() and any(p.same(q) for q in plan)] if self.engine.incremental else []
+        drop = [p for p in old if p not in keep]
+        new = [q for q in plan if not any(q.same(p) for p in keep)]
+        if drop and self.inflight:  # never pull a model out from under a running request
+            self.idle.clear()
+            await self.idle.wait()
+        for p in drop:
+            await self._kill(p)
+        if drop and self.engine.name == "flm":
+            await asyncio.sleep(0.3)  # the driver frees the NPU context right after exit
+        self.child = Child(keep + new, pmode if self.engine.uses_pmode else None)
+        if not new:
+            return []
+        self.state = "loading"
+        self.publish()
+        ok = await asyncio.gather(*(self._spawn(q) for q in new))
+        failed = [q for q, good in zip(new, ok) if not good]
+        self.child.procs = [p for p in self.child.procs if p not in failed]
+        if failed:
+            self.last_error = failed[0].failed
+        if self.child.procs:
+            self.loaded_at = time.time()
+            self.state = "ready"
+        else:
+            self.child = None
+            self.state = "error"
+        self.publish()
+        if failed and not self.child:
+            self.arm_exit()
+        return [x for q in failed for x in q.components]
+
+    async def _probe(self, port: int, path: str = "/v1/models") -> bool:
         try:
             r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), 1)
         except (OSError, asyncio.TimeoutError):
             return False
         try:
-            w.write(b"GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            w.write(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode())
             await w.drain()
             line = await asyncio.wait_for(r.readline(), 5)
             return b" 200" in line
@@ -176,56 +490,65 @@ class Gateway:
         finally:
             w.close()
 
+    async def _kill(self, p: Proc):
+        if not p.proc or not p.alive():
+            return
+        log("stop:", p.components, p.chat_model or "")
+        p.proc.terminate()
+        try:
+            await asyncio.wait_for(p.proc.wait(), 8)
+        except asyncio.TimeoutError:
+            log(f"{p.kind} ignored SIGTERM, killing")
+            p.proc.kill()
+            await p.proc.wait()
+
     async def _stop(self):
         child, self.child = self.child, None
         if self.unload_handle:
             self.unload_handle.cancel()
             self.unload_handle = None
-        if not child or not child.proc:
+        if not child:
             return
-        if child.alive():
-            log("stop:", child.components, child.chat_model or "")
-            child.proc.terminate()
-            try:
-                await asyncio.wait_for(child.proc.wait(), 8)
-            except asyncio.TimeoutError:
-                log("flm ignored SIGTERM, killing")
-                child.proc.kill()
-                await child.proc.wait()
+        procs = [p for p in child.procs if p.alive()]
+        for p in procs:
+            await self._kill(p)
+        if procs and self.engine.name == "flm":
             await asyncio.sleep(0.3)  # the driver frees the hardware context right after exit
         self.state = "off"
         self.publish()
         self.arm_exit()
 
     async def acquire(self, need: str, model: str | None = None, pmode: str | None = None) -> int:
-        """Make sure the flm child serves `need`, count the caller as in flight, return the port."""
+        """Make sure something serves `need`, count the caller as in flight, return its port."""
+        if not self.engine.uses_pmode:
+            pmode = None
         async with self.lock:
             c = self.child
-            if not (c and c.alive() and c.has(need, model) and (pmode is None or c.pmode == pmode)):
+            if not (c and c.has(need, model) and (pmode is None or c.pmode == pmode)):
+                # unknown model, missing file, no room: fail before unloading (may ask Hugging Face for a size)
+                await asyncio.get_running_loop().run_in_executor(None, self.engine.check, need, model, c)
                 now, timeout = time.monotonic(), self.idle_timeout()
                 keep = []
-                if c and c.alive():
-                    keep = [x for x in c.components if x != need and now - self.last_used.get(x, 0) < timeout]
+                if c:
+                    keep = [x for x in c.components if x != need and now - self.last_used.get(x, 0) < timeout
+                            and (c.proc_for(x) and c.proc_for(x).alive())]
                     keep.sort(key=lambda x: -self.last_used.get(x, 0))
-                wanted = ([need] + keep)[: int(self.cfg["server"]["max_components"])]
+                wanted = ([need] + keep)[: self.engine.max_components]
                 chat_model = model if need == "chat" else (c.chat_model if c and "chat" in wanted else None)
-                if self.inflight:
-                    self.idle.clear()
-                    await self.idle.wait()
-                await self._stop()
-                pm = pmode or self.pmode()
-                ok = await self._start(wanted, chat_model, pm)
-                if not ok and len(wanted) > 1:
-                    ok = await self._start([need], model if need == "chat" else None, pm)
-                if not ok:
-                    raise RuntimeError(self.last_error or "flm failed to start")
+                pm = (pmode or self.pmode()) if self.engine.uses_pmode else None
+                failed = await self._load(wanted, chat_model, pm)
+                if need in failed and len(wanted) > 1 and not self.engine.incremental:
+                    # flm: the NPU may not fit the combination; try the one component that is needed
+                    failed = await self._load([need], model if need == "chat" else None, pm)
+                if need in failed or not (self.child and self.child.proc_for(need)):
+                    raise RuntimeError(self.last_error or f"{self.engine.name} failed to start")
             self.last_used[need] = time.monotonic()
             self.inflight += 1
             if self.unload_handle:
                 self.unload_handle.cancel()
                 self.unload_handle = None
             self.publish()
-            return self.child.port
+            return self.child.proc_for(need).port
 
     def release(self, need: str | None = None):
         self.inflight = max(0, self.inflight - 1)
@@ -271,6 +594,61 @@ class Gateway:
         self.publish(force_off=True)
         os._exit(0)
 
+    # ---------------------------------------------------------------- memory guard
+    def start_memory_guard(self) -> None:
+        """Kernel memory-pressure trigger (PSI): costs nothing until memory gets tight. When it fires while
+        models are loaded and RAM is nearly gone, they are killed at once so the desktop and games live."""
+        floor = float(self.cfg["server"].get("memory_guard_gb", 0) or 0)
+        if floor <= 0:
+            return
+        try:
+            fd = os.open("/proc/pressure/memory", os.O_RDWR | os.O_NONBLOCK)
+            # 300 ms of stalls in a 2 s window (2 s steps are what unprivileged triggers may use); the
+            # kernel overwrites the last byte with NUL, so send one
+            os.write(fd, b"some 300000 2000000\0")
+        except OSError as e:
+            log("memory guard off:", e)
+            return
+        loop = asyncio.get_running_loop()
+
+        def watch():
+            p = select.poll()
+            p.register(fd, select.POLLPRI)
+            while True:
+                for _, ev in p.poll():
+                    if ev & select.POLLERR:
+                        return
+                    loop.call_soon_threadsafe(self.on_memory_pressure)
+
+        threading.Thread(target=watch, name="memory-guard", daemon=True).start()
+
+    def on_memory_pressure(self, avail: int | None = None) -> bool:
+        """Kill the model servers when RAM available drops under [server] memory_guard_gb. True if it did."""
+        c = self.child
+        if not c or not c.procs:
+            return False
+        floor = float(self.cfg["server"].get("memory_guard_gb", 0) or 0) * 1e9
+        avail = hw.mem_available() if avail is None else avail
+        if avail is None or avail >= floor:
+            return False
+        names = ", ".join(p.chat_model or p.kind for p in c.procs)
+        self.last_error = f"unloaded {names}: RAM was running out ({avail / 1e9:.1f} GB left)"
+        log("memory guard:", self.last_error)
+        for p in c.procs:
+            if p.alive():
+                p.proc.kill()  # SIGKILL frees the memory now; in-flight requests get an error
+        self.state = "error"
+        self.publish()
+
+        async def tidy():
+            async with self.lock:
+                if self.child is c:
+                    await self._stop()
+                    self.state = "error"
+                    self.publish()
+        asyncio.get_running_loop().create_task(tidy())
+        return True
+
     # ---------------------------------------------------------------- status / waybar
     def status(self) -> dict:
         c = self.child
@@ -280,12 +658,17 @@ class Gateway:
             "activity": self.activity,
             "components": c.components if c else [],
             "chat_model": c.chat_model if c else None,
-            "pmode": c.pmode if c else self.pmode(),
+            "pmode": (c.pmode if c else self.pmode()) if self.engine.uses_pmode else None,
+            "backend": self.engine.name,
+            "runs_on": C.engine_label(self.cfg),
             "power": "ac" if ac else "battery",
             "idle_unload": self.idle_timeout(),
             "inflight": self.inflight,
             "loaded_since": self.loaded_at if c else None,
             "flm_pid": c.proc.pid if c and c.proc else None,
+            "procs": [{"kind": p.kind, "components": p.components, "model": p.chat_model, "port": p.port,
+                       "pid": p.proc.pid if p.proc else None, "note": p.note,
+                       "vram_mb": hw.proc_vram(p.proc.pid) // 1048576 if p.proc else 0} for p in c.procs] if c else [],
             "last_tps": self.last_tps,
             "last_error": self.last_error,
             "npu": hw.npu_info(),
@@ -325,15 +708,18 @@ class Gateway:
         else:
             cls, text = "ready", tag(col["tag"]) + f"<span color='{col['text']}'>{what}</span>"
         ac = self.on_ac()
-        tip = [f"NPU · {st}" + (f" · {act}" if act else "")]
+        where = C.engine_label(self.cfg)
+        tip = [f"{where} · {st}" + (f" · {act}" if act else "")]
+        pm = self.engine.uses_pmode
         if c:
+            names = {"asr": "whisper (speech to text)", "embed": "embeddings"}
             tip.append("loaded: " + ", ".join(
-                (c.chat_model if x == "chat" else {"asr": "whisper (speech to text)",
-                                                   "embed": "embeddings"}[x]) for x in c.components))
-            tip.append(f"pmode {c.pmode} · unloads after {int(self.idle_timeout())} s idle "
+                (p.chat_model if x == "chat" else names[x]) + (f" on the {p.note}" if p.note else "")
+                for p in c.procs for x in p.components))
+            tip.append((f"pmode {c.pmode} · " if pm else "") + f"unloads after {int(self.idle_timeout())} s idle "
                        f"({'AC' if ac else 'battery'})")
         else:
-            tip.append(f"nothing loaded · {'AC' if ac else 'battery'} → pmode {self.pmode()}")
+            tip.append(f"nothing loaded · {'AC' if ac else 'battery'}" + (f" → pmode {self.pmode()}" if pm else ""))
         if self.last_tps and c:
             tip.append(f"last reply {self.last_tps:.1f} tok/s")
         if st == "error" and self.last_error:
@@ -353,7 +739,8 @@ class Gateway:
             log("bar write failed:", e)
         # machine-readable twin for other tools (e.g. a fleet dashboard reading it over SSH)
         st = {"state": st, "activity": act, "components": c.components if c else [],
-              "chat_model": c.chat_model if c else None, "pmode": c.pmode if c else self.pmode(),
+              "chat_model": c.chat_model if c else None,
+              "pmode": (c.pmode if c else self.pmode()) if pm else None, "runs_on": where,
               "power": "ac" if ac else "battery", "last_tps": self.last_tps if c else None,
               "updated": time.time()}
         try:
@@ -509,20 +896,12 @@ class Gateway:
         now = time.monotonic()
         if now - self.models_cache[0] > 60:
             try:
-                p = await asyncio.create_subprocess_exec(
-                    os.path.expanduser(self.cfg["server"]["flm"]), "list", "--json", "--filter", "installed", "--quiet",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                out, _ = await asyncio.wait_for(p.communicate(), 20)
-                data = json.loads(out)
-                self.models_cache = (now, data.get("models", data) if isinstance(data, dict) else data)
-            except (OSError, ValueError, asyncio.TimeoutError):
+                self.models_cache = (now, await self.engine.installed())
+            except (OSError, ValueError, KeyError, asyncio.TimeoutError):
                 pass
         ids = [{"id": a, "object": "model", "owned_by": "npukit", "alias_of": C.resolve_model(a, self.cfg)}
                for a in self.cfg["models"]["aliases"]]
-        for m in self.models_cache[1]:
-            ids.append({"id": m["name"], "object": "model", "owned_by": "FastFlowLM",
-                        "labels": m.get("label", []), "size_gb": m.get("footprint")})
-        return {"object": "list", "data": ids}
+        return {"object": "list", "data": ids + list(self.models_cache[1])}
 
     async def control(self, action: str, req: dict, writer):
         if action == "stop":
@@ -605,6 +984,7 @@ async def serve(cfg: dict) -> None:
         log(f"npud: listening on {host}:{port}")
     gw.publish()
     gw.arm_exit()
+    gw.start_memory_guard()
     async with server:
         await stop.wait()
     async with gw.lock:

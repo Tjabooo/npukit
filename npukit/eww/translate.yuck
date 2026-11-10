@@ -1,0 +1,43 @@
+;; npukit translate overlay (`npu translate`). Rendered by npukit/translate.py into
+;; $XDG_RUNTIME_DIR/npukit/eww: the @…@ placeholders become the callbacks into npukit.
+;; Chip labels :wrap so GTK can't ellipsize them ("Chine…"): a wrapping label is never narrower
+;; than its longest word, so the window grows instead.
+;; State comes from npukit (`eww update tr=…`); nothing here keeps state of its own.
+(defvar tr @INITIAL@)
+
+(defwindow npu-translate
+  :monitor 0
+  :geometry (geometry :anchor "center")
+  :stacking "overlay"
+  :exclusive false
+  :focusable true
+  :namespace "npu-translate"
+  (box :class "deck" :orientation "v" :space-evenly false
+    (box :class "head" :space-evenly false
+      (label :class "brand" :text "TRANSLATE")
+      (label :class "arrow" :text "→")
+      (label :class "target" :text "${tr.lang}")
+      (box :hexpand true)
+      (label :class "engine" :visible {tr.engine != ""} :text "${tr.engine}")
+      (eventbox :class "close" :cursor "pointer" :onclick @ON_CLOSE@
+        (label :text "ESC ✕")))
+    (box :class "field" :space-evenly false
+      (input :class "message" :hexpand true :timeout "2s"
+             :onchange @ON_CHANGE@
+             :onaccept @ON_ACCEPT@))
+    (box :class "langs" :space-evenly false :spacing 6
+      (label :class "label" :text "INTO")
+      (box :space-evenly false :spacing 6  ; own box: eww re-adds for-children at the end of their parent
+        (for c in {tr.chips}
+          (eventbox :class "chip-hit" :cursor "pointer" :onclick @ON_CHIP@
+            (label :class "chip ${c.on ? 'on' : ''}" :wrap true :text "${c.name}"))))
+      (box :hexpand true)
+      (label :class "label" :text "OTHER")
+      (box :class "other" :space-evenly false
+        (input :class "lang-input" :width 150 :timeout "2s" :onaccept @ON_LANG@)))
+    (box :class "result-box ${tr.busy ? 'busy' : ''} ${tr.error ? 'error' : ''}" :orientation "v"
+         :space-evenly false :visible {tr.busy || tr.error || tr.result != ""}
+      (label :class "result" :xalign 0 :wrap true :visible {tr.result != ""} :text "${tr.result}")
+      (label :class "status" :xalign 0 :wrap true :text "${tr.status}"))
+    (label :class "hint" :xalign 0
+           :text "ENTER TRANSLATES + COPIES  ·  ENTER AGAIN TYPES IT  ·  TAB → OTHER LANGUAGE  ·  ESC CLOSES")))

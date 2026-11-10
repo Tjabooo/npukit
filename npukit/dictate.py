@@ -1,4 +1,4 @@
-"""`npu dictate`: press once to record, again to transcribe on the NPU and type the text.
+"""`npu dictate`: press once to record, again to transcribe (Whisper on the NPU or GPU) and type the text.
 
 The first press starts pw-record and, in parallel, asks the gateway to load Whisper, so the
 model is usually ready by the time you stop talking. Works in any Wayland app: the text is
@@ -53,7 +53,7 @@ def start(cfg) -> int:
     try:  # load Whisper while the user talks; show REC in the bar
         client.call("/npu/warm", {"component": "asr", "activity": "rec"}, timeout=180)
     except client.ApiError as e:
-        ui.notify("Dictation", f"NPU not ready: {e}", urgency="critical")
+        ui.notify("Dictation", f"{C.engine_label(cfg)} not ready: {e}", urgency="critical")
     return 0
 
 
@@ -113,7 +113,7 @@ def stop(cfg, info) -> int:
         ui.copy(text)
     typed = ui.type_text(text, list(d.get("type") or []))
     how = "typed + copied" if typed else "copied (install wtype to type it)"
-    ui.notify(f"Dictation · {took:.0f}s audio → {time.monotonic() - t0:.1f}s on NPU",
+    ui.notify(f"Dictation · {took:.0f}s audio → {time.monotonic() - t0:.1f}s on {C.engine_label(cfg)}",
               f"{text[:200]}\n<i>{how}</i>", timeout_ms=4000)
     print(text)
     return 0

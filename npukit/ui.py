@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import time
 
 
 def notify(title: str, body: str = "", *, urgency: str = "normal", tag: str = "npukit",
@@ -43,3 +45,25 @@ def rofi(lines: list[str], prompt: str, *, theme: str | None = None, mesg: str |
         args += ["-mesg", mesg]
     r = subprocess.run(args, input="\n".join(lines).encode(), capture_output=True, check=False)
     return r.returncode, r.stdout.decode().strip()
+
+
+def wait_menu_gone(settle: float, namespace: str = "rofi", timeout: float = 1.5) -> None:
+    """Block until the menu is off screen, so a frozen-screen region pick doesn't capture it.
+
+    The compositor fades a closed layer out after rofi exits; wait for the layer to leave
+    `hyprctl layers` (when Hyprland is there) and then for the fade itself."""
+    if settle <= 0:
+        return
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            out = subprocess.run(["hyprctl", "layers", "-j"], capture_output=True, text=True,
+                                 timeout=1, check=False).stdout
+            mons = json.loads(out or "{}")
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            break
+        names = [l.get("namespace") for m in mons.values() for lv in m.get("levels", {}).values() for l in lv]
+        if namespace not in names:
+            break
+        time.sleep(0.03)
+    time.sleep(settle)

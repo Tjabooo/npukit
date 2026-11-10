@@ -1,5 +1,5 @@
 [Unit]
-Description=npukit NPU gateway (owns the FastFlowLM process, unloads it when idle)
+Description=npukit gateway (owns the model servers: FastFlowLM on the NPU or llama.cpp/whisper.cpp; unloads them when idle)
 Documentation=https://github.com/Tjabooo/npukit
 Requires=npud.socket
 After=npud.socket
@@ -11,7 +11,11 @@ Restart=on-failure
 RestartSec=3
 # flm needs to lock its NPU buffers
 LimitMEMLOCK=infinity
-# the gateway idles in epoll; keep it from competing with the desktop
+# the gateway idles in epoll; keep it and its model servers from competing with the desktop:
+# under CPU contention (a game) they get half the share of a normal app
 Nice=5
+CPUWeight=50
+# if the kernel ever runs out of memory, the model servers are what it kills, not the desktop or a game
+OOMScoreAdjust=500
 TimeoutStopSec=20
 KillMode=mixed

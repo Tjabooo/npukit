@@ -62,3 +62,17 @@ into the same power ceiling and energy per token follows speed.
 | Speech to text | whisper-v3:turbo | 11 s clip → 2.9 s warm, ~5 s including model load |
 | Embeddings | embed-gemma:300m | 2.4–3.7 chunks/s (60-line chunks), ~21 W package while indexing; ~1.5 s fixed cost per request, so batch. Full index of ~1000 files: 20 min, updates: seconds |
 | OCR of a code screenshot | qwen3.5:4b / qwen3vl-it:4b | ~3 s prefill + ~15 tok/s |
+
+## GPU backend (llama.cpp Vulkan): RX 9070 XT 16 GB, Ryzen 7 9800X3D, 32 GB RAM
+
+`vram_reserve = 0.2` (`--fit-target 3260`), `threads = 6`, `-c 16384`, thinking off, a ~370-token answer.
+
+| Model | Desktop VRAM in use | On the GPU | Generation | CPU while generating |
+|---|---|---|---|---|
+| Qwen3.5-9B Q4_K_M + mmproj (fast / vision) | 3.2 GB | all (6.5 GiB) | ~88 tok/s | ~1 core |
+| Qwen3.6-35B-A3B UD-IQ3_XXS (quality) | 3.2 GB (light desktop) | 9.7 GiB, rest in RAM | 84.5 tok/s | 4.5 cores |
+| same | + 4.8 GB (game running) | 5.0 GiB | 47.4 tok/s | 5.5 cores |
+| same | + 7.0 GB (heavy game) | 2.8 GiB | 40.3 tok/s | 5.6 cores |
+
+Loads take 3–9 s from the page cache. The 20% reserve stayed free in every case; the MoE expert weights that
+don't fit live in RAM, which is why the 35B model stays fast with most of it off the GPU.
