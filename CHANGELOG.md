@@ -50,6 +50,11 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 - `npu ocr --pick`: choose the target language in a searchable rofi list before selecting the region
   (English and native names plus codes, the last used on top so Enter repeats it, any unlisted
   language can be typed; `[ui] lang_theme`). "Translate region" in `npu menu` uses it too.
+- `status.json` next to the waybar file: the same gateway state as plain JSON for scripts.
+- `npu index` also indexes extensionless files that start with `#!` (scripts in `bin/`).
+- `npu search --rofi QUERY` skips the prompt and opens the results.
+- `[ui] menu_theme` and `search_theme` config keys for the rofi themes.
+- Battery and idle-cost runs in `docs/benchmarks.md`.
 
 ## [0.1.0] - 2026-11-05
 
