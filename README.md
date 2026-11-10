@@ -3,7 +3,7 @@
 [![CI](https://github.com/Tjabooo/npukit/actions/workflows/ci.yml/badge.svg)](https://github.com/Tjabooo/npukit/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/Tjabooo/npukit?include_prereleases&sort=semver)](https://github.com/Tjabooo/npukit/releases) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Put the AMD Ryzen AI NPU to everyday use on Linux: a local LLM API, push-to-talk dictation,
-screenshot OCR and semantic search over your notes and code. All of it runs on the XDNA2 NPU through
+screenshot OCR and semantic search over your notes and code, in one small Rust binary (`npu`). All of it runs on the XDNA2 NPU through
 [FastFlowLM](https://github.com/ROCm/FastFlowLM), and the model leaves the NPU as soon as it goes idle.
 No NPU? The same tools run on a GPU (or the CPU) through llama.cpp and whisper.cpp: see
 [Without an NPU](#without-an-npu-gpu-backend).
@@ -43,7 +43,7 @@ No NPU? The same tools run on a GPU (or the CPU) through llama.cpp and whisper.c
 | Vision (OCR, describe) | NPU | Qwen3.5 / Qwen3-VL via FastFlowLM |
 | Speech to text | NPU | Whisper large-v3-turbo via FastFlowLM |
 | Embeddings | NPU | EmbeddingGemma 300M via FastFlowLM (expect ~half a CPU core of host work) |
-| Recording, typing, search ranking | CPU | pw-record, wtype, numpy dot products |
+| Recording, typing, search ranking | CPU | pw-record, wtype, f32 dot products over the index |
 
 The NPU has room for **one chat model plus one helper** (Whisper or embeddings): all three together fail with
 `DRM_IOCTL_AMDXDNA_CREATE_HWCTX … Invalid argument`, and a second FastFlowLM process can't get an NPU context
@@ -58,7 +58,7 @@ FastFlowLM with the two most recently used.
   unrelated to the model (different after every restart) and stalled the NPU (`aie2_tdr_detect: TDR timeout` in the
   kernel log), so search results were noise. If your distro is behind, unpack the upstream
   `fastflowlm_<ver>_linux.tar.gz` anywhere and set `[server] flm = "/path/to/flm"`.
-- Python 3.11+. numpy is optional (faster search); install it from your distro (`python-numpy`).
+- Rust 1.85+ to build (Arch: `pacman -S rust`), or a prebuilt `npu` binary (`NPUKIT_BINARY=… ./install.sh`).
 - Desktop tools: `pw-record` (PipeWire), `wl-clipboard`, `notify-send`, `rofi`, a region screenshotter that can
   print a PNG (`hyprshot --raw`, or `grim -g "$(slurp)" -`), optionally `wtype` for typing dictated and translated
   text, and [eww](https://github.com/elkowar/eww) 0.6+ for the `npu translate` overlay.
@@ -67,13 +67,15 @@ FastFlowLM with the two most recently used.
 
 ```sh
 git clone https://github.com/Tjabooo/npukit && cd npukit
-./install.sh            # ~/.local/share/npukit + venv, ~/.local/bin/npu, systemd user units
+./install.sh            # cargo build --release → ~/.local/share/npukit/bin/npu, ~/.local/bin/npu, systemd user units
 flm pull qwen3.5:4b && flm pull whisper-v3:turbo && flm pull embed-gemma:300m
 npu ask "hello"         # first request starts the gateway and loads the model
 ```
 
 `install.sh` enables `npud.socket` (the gateway starts on the first request) and `npu-index.timer`
-(index refresh every 30 minutes). Re-run it after `git pull`.
+(index refresh every 30 minutes). Re-run it after `git pull`. To install a binary built on another machine
+(same CPU architecture), pass it in: `NPUKIT_BINARY=/path/to/npu ./install.sh`. Coming from the Python
+version (0.1): the same install replaces it, removes its venv and keeps the config and the search index.
 
 ## Usage
 
@@ -194,7 +196,7 @@ open = ["code", "-g", "{path}:{line}"]
  tools (npu dictate/ocr/search, any OpenAI client)
           │  HTTP 127.0.0.1:13306
           ▼
-   npud (asyncio, socket-activated) ── bar.json + SIGRTMIN+16 ──▶ waybar
+   npud (tokio, one thread, socket-activated) ── bar.json + SIGRTMIN+16 ──▶ waybar
           │  picks components, restarts / unloads on idle, pmode by power source
           ▼
    flm serve [chat model] [--asr 1] [--embed 1] --pmode … (private port)
@@ -208,6 +210,13 @@ open = ["code", "-g", "{path}:{line}"]
 - FastFlowLM reports some failures as HTTP 200 with an `{"error": …}` body; the client treats those as errors.
 - With nothing loaded the gateway sits in `epoll` with no timers; started by systemd, it exits after
   `exit_after` seconds and systemd starts it again on the next connection.
+- Model servers get `PR_SET_PDEATHSIG`: if the gateway itself dies, they follow instead of holding the NPU or VRAM.
+- Search ranks on the stored vectors alone and reads the text of the few winners afterwards, so a query over
+  15k chunks costs ~10 ms of CPU on top of embedding the query.
+
+The `npu` binary starts in about a millisecond, which matters for the many short-lived calls: every keystroke
+and chip click in the translate overlay, the waybar clicks, the Hyprland binds. (The Python version took
+80–100 ms per call before doing anything.)
 
 ## Without an NPU (GPU backend)
 
@@ -263,8 +272,12 @@ See [docs/benchmarks.md](docs/benchmarks.md).
 ## Development
 
 ```sh
-python -m unittest discover -s tests -v    # fake flm / llama-server / whisper-server, no NPU or GPU needed
+cargo test                       # unit tests + end-to-end tests against fake flm / llama-server / whisper-server
+cargo clippy --all-targets -- -D warnings
 ```
+
+The end-to-end tests (`tests/integration.rs`) run the real `npu serve` against the stand-ins in
+`tests/fake_flm.py` and `tests/fake_llama.py` (they need `python3`), so no NPU or GPU is needed.
 
 ## License
 

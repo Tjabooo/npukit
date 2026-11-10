@@ -1,7 +1,0 @@
-#!/bin/sh
-# Thin launcher: runs the npukit package from the install dir with its venv's Python.
-here=$(dirname "$(readlink -f "$0")")
-root=${NPUKIT_HOME:-$(dirname "$here")}
-py="$root/venv/bin/python"
-[ -x "$py" ] || py=python3
-PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m npukit "$@"

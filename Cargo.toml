@@ -1,0 +1,32 @@
+[package]
+name = "npukit"
+version = "0.2.0"
+edition = "2021"
+description = "Everyday local AI on AMD XDNA2 NPUs (FastFlowLM) or a GPU (llama.cpp + whisper.cpp): gateway, dictation, OCR, translation, semantic search"
+license = "MIT"
+repository = "https://github.com/Tjabooo/npukit"
+readme = "README.md"
+rust-version = "1.85"
+
+[[bin]]
+name = "npu"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+indexmap = { version = "2", features = ["serde"] }
+libc = "0.2"
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+rustyline = { version = "19", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "process", "time", "signal", "sync", "macros"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "preserve_order"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,4 +1,4 @@
-;; npukit translate overlay (`npu translate`). Rendered by npukit/translate.py into
+;; npukit translate overlay (`npu translate`). Rendered by src/translate.rs into
 ;; $XDG_RUNTIME_DIR/npukit/eww: the @…@ placeholders become the callbacks into npukit.
 ;; Chip labels :wrap so GTK can't ellipsize them ("Chine…"): a wrapping label is never narrower
 ;; than its longest word, so the window grows instead.

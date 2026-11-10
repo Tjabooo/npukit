@@ -4,6 +4,23 @@ All notable changes to this project are listed here ([Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-10
+
+Rewritten in Rust: one `npu` binary (gateway, CLI, overlay callbacks), same commands, config, files and API.
+
+- `npu` starts in ~1 ms instead of 80–100 ms (Python start-up): every translate-overlay keystroke, chip click,
+  waybar click and Hyprland bind is that much quicker. `npu status` 240 → 45 ms (most of it is `flm version`).
+- Search ranks on the stored vectors only and fetches the text of the winners afterwards: ~10 ms over 15k
+  chunks instead of ~100 ms (with numpy) plus start-up. The existing index is reused as is.
+- The gateway runs on a single-threaded tokio loop; idle it still sits in epoll with no timers.
+- Model servers get `PR_SET_PDEATHSIG`, so they can't outlive a crashed gateway and hold the NPU or VRAM.
+- The file tools no longer follow symlinks out of a granted folder in the built-in search (when `rg` is missing).
+- Install: `install.sh` builds with cargo, or installs a prebuilt binary (`NPUKIT_BINARY=…`); it removes the
+  Python package and venv and keeps the config and index. No Python or numpy needed at runtime.
+- Tests: unit tests plus end-to-end tests that run `npu serve` against the fake flm/llama/whisper servers.
+
+### Earlier, unreleased in 0.1
+
 - `[llamacpp.models] <tag>.idle_unload`: a model can stay loaded longer (or shorter) than `[power]`, e.g. a
   translation model kept warm through a game while a big model still leaves after 5 minutes.
 - `npu ocr --pick` starts loading the reading model while the language list is open.
